@@ -311,8 +311,22 @@ void handle_data(icmp_echo_packet_t *pkt, int total_len, forward_desc_t *ring[],
         //TODO NOT COMPLETELY received;
         //EXIT(0);
     } else {
-        pt_pkt->seq_no == *next_expected_await_sendseq;
-    }
+            //TODO????
+        if (pt_pkt->seq_no == *next_expected_seq) {
+            if (!ring[*insert_idx]) {
+                ring[*insert_idx] = create_fwd_desc();
+                (*await_send)++;
+                (*insert_idx)++;
+            } else if (ring[*insert_idx]) {
+                log();
+            }
+
+            (*next_expected_seq)++;
+            if (*insert_idx >= kPing_window_size) { *insert_idx = 0; }
+
+            while (ring[*insert_idx]) {
+                if (ring[*insert_idx]->seq_no == *next_expected_seq) {
+                    (*
 
 }
 
