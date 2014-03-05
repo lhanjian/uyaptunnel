@@ -52,7 +52,8 @@ typedef struct {
     char data[0];
 } __attribute__ ((packed)) icmp_echo_packet_t;
 
-void handle_packet(char *buf, int bytes, int is_pcap, struct sockaddr_in *addr, int icmp_sock);
+void handle_packet(char *buf, int bytes, int is_pcap, 
+        struct sockaddr_in *addr, int icmp_sock);
 
 
 void print_statistics();
@@ -126,8 +127,10 @@ typedef struct serv_conf_s {
 proxy_desc_t *create_and_insert_proxy_desc(uint16_t id_no, uint16_t icmp_id, int sock, 
         struct sockaddr_in *addr, uint32_t dst_ip, uint32_t dst_port, 
         uint32_t init_state, uint32_t type);
+forward_desc_t *create_fwd_desc(uint16_t seq_no, uint32_t data_len, char *data);
 
-/*void handle_data(icmp_echo_packet_t *pkt, int total_len, forward_desc_t *ring[], int *await_send, int *insert_idx, uint16_t *next_expected_seq);*/
+
+void handle_data(icmp_echo_packet_t *pkt, int total_len, forward_desc_t *ring[], int *await_send, int *insert_idx, uint16_t *next_expected_seq);
 proxy_desc_t* create_and_insert_proxy_desc(uint16_t id_no, uint16_t icmp_id, int sock, struct sockaddr_in *addr, uint32_t dst_ip, uint32_t dst_port, uint32_t init_state, uint32_t type);
 
 typedef int error_rv_t;
@@ -295,7 +298,9 @@ proxy_desc_t *create_and_insert_proxy_desc(uint16_t id_no, uint16_t icmp_id, int
     cur->buf = malloc(icmp_receive_buf_len);
     cur->last_activity = time_as_double();
     //don't use linked list
-    insert_to_chain(cur);//TODO
+    //TODO
+    //insert_to_chain(cur);
+    fdlist[id_no] = cur;//insert it to chain
 
     return cur;
 }
@@ -435,29 +440,17 @@ void handle_packet(char *buf, int bytes, int is_pcap,
     }
 
 }
-proxy_desc_t* create_and_insert_proxy_desc(uint16_t id_no, uint16_t icmp_id, int sock, 
-        struct sockaddr_in *addr, uint32_t dst_ip, uint32_t dst_port, 
-        uint32_t init_state, uint32_t type)
+
+forward_desc_t* create_fwd_desc(uint16_t seq_no, uint32_t data_len, char *data)
 {
-    proxy_desc_t *cur;
+    forward_desc_t *fwd_desc = malloc(sizeof(forward_desc_t)+data_len);
+    fwd_desc->seq_no = seq_no;
+    fwd_desc->length = data_len;
+    fwd_desc->remaining = data_len;
 
-    cur = calloc(1, sizeof(proxy_desc_t));
-    cur->id_no = id_no;
-    cur->dest_addr = *addr;
-    cur->dst_ip = dst_ip;
-    cur->dst_port = dst_port;
-    cur->icmp_id = icmp_id;
+    if (data_len > 0) {memcpy(fwd_desc->data, data, data_len);}//TODO , more performance
 
-    if (!sock) {
-        cur->sock = socket(AF_INET, SOCK_STREAM, 0);
-
-        memset(addr, 0, sizeof(struct sockaddr_in));
-        addr->sin_port = htons((uint16_t)dst_port);
-        addr->sin_addr.s_addr = dst_ip;
-        addr->sin_family = AF_INET;
-
-        connect(cur->sock, (struct sockaddr *)addr, sizeof(struct sockaddr_in));
-    }
-        
+    return fwd_desc;
 }
+
 
