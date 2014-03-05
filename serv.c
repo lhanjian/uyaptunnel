@@ -111,6 +111,7 @@ enum {
             + icmp_header_size + sizeof(ping_tunnel_pkt_t)),
     pcap_buf_size = (   payload_size + ip_header_size + icmp_header_size
         + sizeof(ping_tunnel_pkt_t)+64  )  * 64,
+    seq_expiry_tbl_length = 65536;
 };
 typedef struct serv_conf_s {
     uint32_t proxy_ip;//proxy's internet address
@@ -127,6 +128,7 @@ proxy_desc_t *create_and_insert_proxy_desc(uint16_t id_no, uint16_t icmp_id, int
         uint32_t init_state, uint32_t type);
 
 /*void handle_data(icmp_echo_packet_t *pkt, int total_len, forward_desc_t *ring[], int *await_send, int *insert_idx, uint16_t *next_expected_seq);*/
+proxy_desc_t* create_and_insert_proxy_desc(uint16_t id_no, uint16_t icmp_id, int sock, struct sockaddr_in *addr, uint32_t dst_ip, uint32_t dst_port, uint32_t init_state, uint32_t type);
 
 typedef int error_rv_t;
 
@@ -299,7 +301,7 @@ proxy_desc_t *create_and_insert_proxy_desc(uint16_t id_no, uint16_t icmp_id, int
 }
 
 void handle_data(icmp_echo_packet_t *pkt, int total_len, forward_desc_t *ring[], 
-        int *await_send, int *insert_idx,  uint16_t *next_expected_seq) {
+        int *await_send/*numbers*/, int *insert_idx,  uint16_t *next_expected_seq) {
 {
     ping_tunnel_pkt_t *pt_pkt = (ping_tunnel_pkt_t *)pkt->data;
     int expected_len = sizeof(ip_packet_t) + sizeof(icmp_echo_packet_t) + sizeof(ping_tunnel_pkt_t);
@@ -312,9 +314,10 @@ void handle_data(icmp_echo_packet_t *pkt, int total_len, forward_desc_t *ring[],
         //EXIT(0);
     } else {
             //TODO????
-        if (pt_pkt->seq_no == *next_expected_seq) {
+        if (pt_pkt->seq_no == *next_expected_seq) {//最先所等待的包到达
             if (!ring[*insert_idx]) {
-                ring[*insert_idx] = create_fwd_desc();
+                ring[*insert_idx] = create_fwd_desc(pt_pkt->seq_no, 
+                        pt_pkt->data_len, pt_pkt->data);
                 (*await_send)++;
                 (*insert_idx)++;
             } else if (ring[*insert_idx]) {
@@ -326,7 +329,38 @@ void handle_data(icmp_echo_packet_t *pkt, int total_len, forward_desc_t *ring[],
 
             while (ring[*insert_idx]) {
                 if (ring[*insert_idx]->seq_no == *next_expected_seq) {
-                    (*
+                    (*next_expected_seq)++;
+                    (*insert_idx)++;
+                    if (*insert_idx >= kPing_window_size)
+                        *insert_idx = 0;
+                } else {
+                    break;
+                }
+            }
+        } else {//后发包先到达
+            int pos = -1;
+            int old_or_wrapped_around = pt_pkt->seq_no - *next_expected_seq;
+            if (old_or_wrapped_around < 0) {
+                old_or_wrapped_around = 
+                    (pt_pkt->seq_no + seq_expiry_tbl_length) - *next_expected_seq;
+                if (old_or_wrapped_around < kPing_window_size) {//wrapped
+                    pos = ((*insert_idx) + old_or_wrapped_around) % kPing_window_size;
+                }
+            } else if (old_or_wrapped_around < kPing_window_size) {
+                pos = ((*insert_idx) + old_or_wrapped_around) % kPing_window_size;
+            }
+
+            if (pos != -1) {
+                if (!ring[pos]) {
+                    ring[pos] = create_fwd_desc(pt_pkt->seq_no, pt_pkt->data_len,
+                            pt_pkt->data);
+                    (*await_send)++;
+                }
+            }
+                
+        } 
+    }
+
 
 }
 
@@ -401,3 +435,29 @@ void handle_packet(char *buf, int bytes, int is_pcap,
     }
 
 }
+proxy_desc_t* create_and_insert_proxy_desc(uint16_t id_no, uint16_t icmp_id, int sock, 
+        struct sockaddr_in *addr, uint32_t dst_ip, uint32_t dst_port, 
+        uint32_t init_state, uint32_t type)
+{
+    proxy_desc_t *cur;
+
+    cur = calloc(1, sizeof(proxy_desc_t));
+    cur->id_no = id_no;
+    cur->dest_addr = *addr;
+    cur->dst_ip = dst_ip;
+    cur->dst_port = dst_port;
+    cur->icmp_id = icmp_id;
+
+    if (!sock) {
+        cur->sock = socket(AF_INET, SOCK_STREAM, 0);
+
+        memset(addr, 0, sizeof(struct sockaddr_in));
+        addr->sin_port = htons((uint16_t)dst_port);
+        addr->sin_addr.s_addr = dst_ip;
+        addr->sin_family = AF_INET;
+
+        connect(cur->sock, (struct sockaddr *)addr, sizeof(struct sockaddr_in));
+    }
+        
+}
+
