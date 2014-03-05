@@ -434,6 +434,9 @@ void handle_packet(char *buf, int bytes, int is_pcap,
                 handle_data((uint16_t)pt_pkt->ack, cur->send_ring, &cur->send_wait_ack, 
                         0, cur->send_idx, &cur->send_first_ack, &cur->remote_ack_val, is_pcap);
             } 
+            handle_ack((uint16_t)pt_pkt->ack, cur->send_ring, 
+                    &cur->send_wait_ack, 0,
+                    cur->send_idx, &cur->send_first_ack, &cur->remote_ack_val, is_pcap);
             cur->last_activity = time_as_double();
         }
 
@@ -453,4 +456,25 @@ forward_desc_t* create_fwd_desc(uint16_t seq_no, uint32_t data_len, char *data)
     return fwd_desc;
 }
 
+void handle_ack(uint16_t seq_no, icmp_desc_t ring[], int *packets_awaiting_ack,
+        int one_ack_only, int insert_idx, uint16_t *remote_ack, init is_pcap)
+{
+    ping_tunnel_pkt_t *pt_pkt;
 
+    if (*packets_awaiting_ack > 0) {
+        if (one_ack_only) {
+            for (int i = 0; i < kPing_window_size; i++) {
+                if (ring[i].ptk && ring[i].seq_no == seq_no && !is_pcap) {
+                    pt_pkt = (ping_tunnel_pkt_t *)ring[i].pkt->data;
+                    *remote_ack = (uint16_t)ntohl(pt_pkt->ack);
+                    free(ring[i].pkt);
+                    ring[i].pkt = 0;
+                    (*packet_awaiting_ack)--;
+                    if (*first_ack == i) {
+                    }
+                }
+            }
+        }
+    }
+
+}
