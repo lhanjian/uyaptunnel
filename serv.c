@@ -462,6 +462,7 @@ void handle_ack(uint16_t seq_no, icmp_desc_t ring[], int *packets_awaiting_ack,
 {
 //    ping_tunnel_pkt_t *pt_pkt;
 
+    
     if (*packets_awaiting_ack > 0) {
         /*
         if (one_ack_only) {
@@ -479,15 +480,18 @@ void handle_ack(uint16_t seq_no, icmp_desc_t ring[], int *packets_awaiting_ack,
         }
         */
         if (!one_ack_only) {
-            icmp_desc_t *ring_i = ring_seq_no(ring, seq_no);
-            free(ring_i->pkt);
-            ring_i->pkt = NULL;
-            (*packets_awaiting_ack)--;
+            int ring_i = ring_indexed_by_seq_no(ring, seq_no);
+
+            if (ring_i) {
+                free(ring[ring_i]->pkt);
+                ring[ring_i]->pkt = NULL;
+                (*packets_awaiting_ack)--;
                     //send_first_ack
-                    //*first_ack
+                    //*first_ack 
+                *first_ack = i+1;
+            }
+        } 
 
-
-        }
 
     }
 }
