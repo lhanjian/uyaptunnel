@@ -451,17 +451,19 @@ forward_desc_t* create_fwd_desc(uint16_t seq_no, uint32_t data_len, char *data)
     fwd_desc->length = data_len;
     fwd_desc->remaining = data_len;
 
-    if (data_len > 0) {memcpy(fwd_desc->data, data, data_len);}//TODO , more performance
+ </stddef>   if (data_len > 0) {memcpy(fwd_desc->data, data, data_len);}//TODO , more performance
 
     return fwd_desc;
 }
 
 void handle_ack(uint16_t seq_no, icmp_desc_t ring[], int *packets_awaiting_ack,
-        int one_ack_only, int insert_idx, uint16_t *remote_ack, init is_pcap)
+        int one_ack_only, int insert_idx, int *first_ack,
+        uint16_t *remote_ack, int is_pcap)
 {
-    ping_tunnel_pkt_t *pt_pkt;
+//    ping_tunnel_pkt_t *pt_pkt;
 
     if (*packets_awaiting_ack > 0) {
+        /*
         if (one_ack_only) {
             for (int i = 0; i < kPing_window_size; i++) {
                 if (ring[i].ptk && ring[i].seq_no == seq_no && !is_pcap) {
@@ -475,6 +477,19 @@ void handle_ack(uint16_t seq_no, icmp_desc_t ring[], int *packets_awaiting_ack,
                 }
             }
         }
-    }
+        */
+        if (!one_ack_only) {
+            icmp_desc_t *ring_i = ring_seq_no(ring, seq_no);
+            free(ring_i->pkt);
+            ring_i->pkt = NULL;
+            (*packets_awaiting_ack)--;
+                    //send_first_ack
+                    //*first_ack
 
+
+        }
+
+    }
 }
+
+
