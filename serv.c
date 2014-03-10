@@ -51,14 +51,21 @@ typedef struct {
     uint16_t seq;
     char data[0];
 } __attribute__ ((packed)) icmp_echo_packet_t;
-
+typedef struct icmp_desc_s {
+    int pkt_len;        // total length of ICMP packet, including ICMP header and ptunnel data.
+    double last_resend;
+    int resend_count;
+    uint16_t seq_no;
+    uint16_t icmp_id; 
+    icmp_echo_packet_t  *pkt;
+} icmp_desc_t;
 void handle_packet(char *buf, int bytes, int is_pcap, 
         struct sockaddr_in *addr, int icmp_sock);
 
 
 void print_statistics();
 
-void log();
+void log_info();
 
 
 typedef struct {
@@ -73,7 +80,7 @@ typedef struct {
     int elems;
 } pqueue_t;
 
-typedef struct {
+typedef struct pcap_info_s {
     pcap_t *pcap_desc;
     struct bpf_program fp;
     uint32_t netp;
@@ -108,12 +115,14 @@ enum {
     icmp_echo_reply = 0,
     ip_header_size = 20,
     icmp_header_size = 8,
-    icmp_receive_buf_len = (payload_size + ip_header_size 
-            + icmp_header_size + sizeof(ping_tunnel_pkt_t)),
+    tcp_receive_buf_len = (payload_size),
+    icmp_receive_buf_len = (   payload_size + ip_header_size 
+            + icmp_header_size + sizeof(ping_tunnel_pkt_t)  ),
     pcap_buf_size = (   payload_size + ip_header_size + icmp_header_size
         + sizeof(ping_tunnel_pkt_t)+64  )  * 64,
-    seq_expiry_tbl_length = 65536;
+    seq_expiry_tbl_length = 65536
 };
+
 typedef struct serv_conf_s {
     uint32_t proxy_ip;//proxy's internet address
     int tcp_listen_port;
@@ -130,8 +139,19 @@ proxy_desc_t *create_and_insert_proxy_desc(uint16_t id_no, uint16_t icmp_id, int
 forward_desc_t *create_fwd_desc(uint16_t seq_no, uint32_t data_len, char *data);
 
 
-void handle_data(icmp_echo_packet_t *pkt, int total_len, forward_desc_t *ring[], int *await_send, int *insert_idx, uint16_t *next_expected_seq);
-proxy_desc_t* create_and_insert_proxy_desc(uint16_t id_no, uint16_t icmp_id, int sock, struct sockaddr_in *addr, uint32_t dst_ip, uint32_t dst_port, uint32_t init_state, uint32_t type);
+void remove_proxy_desc(proxy_desc_t *cur, proxy_desc_t *prev);
+void handle_data(icmp_echo_packet_t *pkt, int total_len, 
+        forward_desc_t *ring[], int *await_send, 
+        int *insert_idx, uint16_t *next_expected_seq);
+//proxy_desc_t* create_and_insert_proxy_desc(uint16_t id_no, uint16_t icmp_id, int sock, struct sockaddr_in *addr, uint32_t dst_ip, uint32_t dst_port, uint32_t init_state, uint32_t type);
+int queue_packet(int icmp_sock, uint8_t type, char *buf, 
+        int num_bytes, uint16_t id_no, uint16_t icmp_id, 
+        uint16_t *seq, icmp_desc_t ring[], int *insert_idx, 
+        int *await_send, uint32_t ip, uint32_t port, uint32_t state, 
+        struct sockaddr_in *dest_addr, uint16_t next_expected_seq, 
+        int *first_ack, uint16_t *ping_seq);
+void pcap_packet_handler(u_char *refcon, const struct pcap_pkthdr *hdr, const u_char* pkt);
+void send_termination_msg(proxy_desc_t *cur, int icmp_sock);
 
 typedef int error_rv_t;
 
@@ -140,7 +160,7 @@ pt_server(serv_conf *conf)
 {
 
     int sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
-    if (sock < 0) {log(); return -1;}
+    if (sock < 0) {log_info(); return -1;}
     int max_sock = sock;
 
     //the part of pcap START
@@ -163,7 +183,7 @@ pt_server(serv_conf *conf)
     //the part of pcap END
 
     char *buf = malloc(icmp_receive_buf_len);
-    log();
+    log_info();
 
 //BIIIIIIIIIIIG for-loop
     int epfd = epoll_create1(EPOLL_CLOEXEC);
@@ -216,7 +236,7 @@ pt_server(serv_conf *conf)
                 struct sockaddr_in addr;
                 ssize_t bytes = recvfrom(sock, buf, icmp_receive_buf_len, 
                         0, (struct sockaddr *)&addr, &addr_len);
-                log();
+                log_info();
                 handle_packet(buf, bytes, 0, &addr, sock);
             } 
 
@@ -224,11 +244,11 @@ pt_server(serv_conf *conf)
                 proxy_desc_t *cur = fdlist[events[n].data.fd];
                 ssize_t bytes = recv(cur->sock, cur->buf, tcp_receive_buf_len, 0);
                 if (bytes <= 0) {
-                    log();
+                    log_info();
                     tmp = cur->next;
                     send_termination_msg(cur, sock);
-                    log();
-                    remove_proxy_desc();
+                    log_info();
+                    remove_proxy_desc(cur, prev);
                     continue;
                 }
                 queue_packet(cur, bytes, 0, 0);
@@ -255,7 +275,7 @@ pt_server(serv_conf *conf)
                 memset(&addr, 0, sizeof(struct sockaddr));
                 addr.sin_family = AF_INET;
                 addr.sin_addr.s_addr = *(in_addr_t *)&(((ip_packet_t *)(cur->data))->src_ip);
-                handle_packet();
+                handle_packet(cur->data, cur->bytes, 1, &addr, fwd_sock);
                 pc.pkt_q.head = cur->next;
                 free(cur);
                 pc.pkt_q.elems--;
@@ -287,7 +307,7 @@ proxy_desc_t *create_and_insert_proxy_desc(uint16_t id_no, uint16_t icmp_id, int
         addr->sin_addr.s_addr = dst_ip;
         addr->sin_family = AF_INET;
         connect(cur->sock, (struct sockaddr *)addr, sizeof(struct sockaddr_in) );
-        log();
+        log_info();
     } else {
         cur->sock = sock;
     }
@@ -326,7 +346,7 @@ void handle_data(icmp_echo_packet_t *pkt, int total_len, forward_desc_t *ring[],
                 (*await_send)++;
                 (*insert_idx)++;
             } else if (ring[*insert_idx]) {
-                log();
+                log_info();
             }
 
             (*next_expected_seq)++;
@@ -373,7 +393,7 @@ void handle_packet(char *buf, int bytes, int is_pcap,
         struct sockaddr_in *addr, int icmp_sock)
 {
     if (bytes < sizeof(icmp_echo_packet_t) + sizeof(ping_tunnel_pkt_t)) {
-       log(); 
+       log_info(); 
     } else { 
         ip_packet_t *ip_pkt = buf;
         icmp_echo_packet_t *pkt = ip_pkt->data;
@@ -385,7 +405,7 @@ void handle_packet(char *buf, int bytes, int is_pcap,
             pt_pkt->id_no = ntohs(pt_pkt->id_no);
             pt_pkt->seq_no = ntohs(pt_pkt->seq_no);
         } else {
-            log();
+            log_info();
             return ;
         }
 
@@ -407,7 +427,7 @@ void handle_packet(char *buf, int bytes, int is_pcap,
             pt_pkt->ack = ntohl(pt_pkt->ack);
             gettimeofday(&tt, 0);
             if (tt.tv_sec < seq_expiry_tbl[pt_pkt->id_no]) {
-                log();
+                log_info();
                 return ; 
             }
 
@@ -422,7 +442,7 @@ void handle_packet(char *buf, int bytes, int is_pcap,
         }
 
         if (cur && pt_pkt->state == kProto_close) {
-            log();
+            log_info();
             cur->should_remove = 1;
             return ;
         }
