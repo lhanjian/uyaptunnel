@@ -59,6 +59,7 @@ typedef struct icmp_desc_s {
     uint16_t icmp_id; 
     icmp_echo_packet_t  *pkt;
 } icmp_desc_t;
+
 void handle_packet(char *buf, int bytes, int is_pcap, 
         struct sockaddr_in *addr, int icmp_sock);
 
@@ -68,9 +69,9 @@ void print_statistics();
 void log_info();
 
 
-typedef struct {
+typedef struct pqueue_elem_s {
     int bytes;
-    struct pqueue_elem_t *next;
+    pqueue_elem_t *next;
     char data[0];
 } pqueut_elem_t;
 
@@ -102,6 +103,7 @@ typedef struct proxy_desc_s {
     uint32_t type_flag;
     uint32_t dst_ip;
     uint32_t dst_port;
+    double last_activity;
     struct sockaddr_in dest_addr;
     struct proxy_desc_s *next;
     //TODO
@@ -115,6 +117,7 @@ enum {
     icmp_echo_reply = 0,
     ip_header_size = 20,
     icmp_header_size = 8,
+    ping_window_size = 64,
     tcp_receive_buf_len = (payload_size),
     icmp_receive_buf_len = (   payload_size + ip_header_size 
             + icmp_header_size + sizeof(ping_tunnel_pkt_t)  ),
@@ -219,11 +222,12 @@ pt_server(serv_conf *conf)
             tmp = cur->next;
             remove_proxy_desc(cur, prev);
         }
-
+/*
         if (!nfds) { 
             continue;
         }//When timeout happens, just continue to next for-loop
 
+*/
         int n = 0;
         /*
         for (cur = conf->tunnul_desc, prev = NULL; cur && cur->sock; cur = tmp, n++) 
@@ -256,13 +260,12 @@ pt_server(serv_conf *conf)
             }
 
         }
+
         conf->now = time_as_double();
+
         void find_no_activity_to_close();//TODO
-
         void send_waiting_packet();
-
         void resend_packet_requiring_resend();
-
         void send_explicit_ack();
 
         if (pcap_dispatch(pc.pcap_desc, 32, pcap_packet_handler, 
@@ -274,8 +277,9 @@ pt_server(serv_conf *conf)
                 cur = pc.pkt_q.head;
                 memset(&addr, 0, sizeof(struct sockaddr));
                 addr.sin_family = AF_INET;
-                addr.sin_addr.s_addr = *(in_addr_t *)&(((ip_packet_t *)(cur->data))->src_ip);
-                handle_packet(cur->data, cur->bytes, 1, &addr, fwd_sock);
+                addr.sin_addr.s_addr = 
+                    *(in_addr_t *)&(((ip_packet_t *)(cur->data))->src_ip);
+                handle_packet(cur->data, cur->bytes, 1, &addr, sock);
                 pc.pkt_q.head = cur->next;
                 free(cur);
                 pc.pkt_q.elems--;
@@ -314,7 +318,7 @@ proxy_desc_t *create_and_insert_proxy_desc(uint16_t id_no, uint16_t icmp_id, int
 
     cur->state = init_state;
     cur->type_flag = type;
-    cur->pkt_type = kICMP_echo_replay;//proxy
+    cur->pkt_type = icmp_echo_reply;//proxy
     cur->buf = malloc(icmp_receive_buf_len);
     cur->last_activity = time_as_double();
     //don't use linked list
@@ -331,7 +335,7 @@ void handle_data(icmp_echo_packet_t *pkt, int total_len, forward_desc_t *ring[],
     ping_tunnel_pkt_t *pt_pkt = (ping_tunnel_pkt_t *)pkt->data;
     int expected_len = sizeof(ip_packet_t) + sizeof(icmp_echo_packet_t) + sizeof(ping_tunnel_pkt_t);
 
-    expected_len += pk_pkt->data_len;
+    expected_len += pt_pkt->data_len;
     expected_len += expected_len % 2;
 
     if (total_len < expected_len) {
@@ -350,13 +354,13 @@ void handle_data(icmp_echo_packet_t *pkt, int total_len, forward_desc_t *ring[],
             }
 
             (*next_expected_seq)++;
-            if (*insert_idx >= kPing_window_size) { *insert_idx = 0; }
+            if (*insert_idx >= ping_window_size) { *insert_idx = 0; }
 
             while (ring[*insert_idx]) {
                 if (ring[*insert_idx]->seq_no == *next_expected_seq) {
                     (*next_expected_seq)++;
                     (*insert_idx)++;
-                    if (*insert_idx >= kPing_window_size)
+                    if (*insert_idx >= ping_window_size)
                         *insert_idx = 0;
                 } else {
                     break;
@@ -368,11 +372,11 @@ void handle_data(icmp_echo_packet_t *pkt, int total_len, forward_desc_t *ring[],
             if (old_or_wrapped_around < 0) {
                 old_or_wrapped_around = 
                     (pt_pkt->seq_no + seq_expiry_tbl_length) - *next_expected_seq;
-                if (old_or_wrapped_around < kPing_window_size) {//wrapped
-                    pos = ((*insert_idx) + old_or_wrapped_around) % kPing_window_size;
+                if (old_or_wrapped_around < ping_window_size) {//wrapped
+                    pos = ((*insert_idx) + old_or_wrapped_around) % ping_window_size;
                 }
-            } else if (old_or_wrapped_around < kPing_window_size) {
-                pos = ((*insert_idx) + old_or_wrapped_around) % kPing_window_size;
+            } else if (old_or_wrapped_around < ping_window_size) {
+                pos = ((*insert_idx) + old_or_wrapped_around) % ping_window_size;
             }
 
             if (pos != -1) {
@@ -399,7 +403,7 @@ void handle_packet(char *buf, int bytes, int is_pcap,
         icmp_echo_packet_t *pkt = ip_pkt->data;
         ping_tunnel_pkt_t *pt_pkt = pkt->data;
         
-        if (ntohl(pt_pkt->magic) == kPing_tunnel_magic) {
+        if (ntohl(pt_pkt->magic) == ping_tunnel_magic) {
             pt_pkt->state = ntohl(pt_pkt->state);
             pkt->identifier = ntohs(pkt->identifier);
             pt_pkt->id_no = ntohs(pt_pkt->id_no);
@@ -471,7 +475,7 @@ forward_desc_t* create_fwd_desc(uint16_t seq_no, uint32_t data_len, char *data)
     fwd_desc->length = data_len;
     fwd_desc->remaining = data_len;
 
- </stddef>   if (data_len > 0) {memcpy(fwd_desc->data, data, data_len);}//TODO , more performance
+    if (data_len > 0) {memcpy(fwd_desc->data, data, data_len);}//TODO , more performance
 
     return fwd_desc;
 }
