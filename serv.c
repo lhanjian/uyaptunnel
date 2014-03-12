@@ -11,12 +11,14 @@
 #include <stddef.h>
 
 double time_as_double(void);
+
 typedef struct {
     int seq_no;
     int length;
     int remaining;
     char data[0];
 } forward_desc_t;
+
 typedef struct {
     uint32_t magic;      //  magic number, used to identify ptunnel packets.
     uint32_t dst_ip;     //  destination IP and port (used by proxy to figure
@@ -71,13 +73,13 @@ void log_info();
 
 typedef struct pqueue_elem_s {
     int bytes;
-    pqueue_elem_t *next;
+    struct pqueue_elem_s *next;
     char data[0];
-} pqueut_elem_t;
+} pqueue_elem_t;
 
 typedef struct {
-    pqueut_elem_t *head;
-    pqueut_elem_t *tail;
+    pqueue_elem_t *head;
+    pqueue_elem_t *tail;
     int elems;
 } pqueue_t;
 
@@ -110,7 +112,7 @@ typedef struct proxy_desc_s {
 } proxy_desc_t;
 
 #define MAX_EVENTS (600)
-proxy_desc_t *fdlist[MAX_EVENTS + 1];//用于通过fd反查proxy_desc_t，文件描述符操作系统公用，所以分开无意义
+proxy_desc_t *fdlist_translated_to_desc[MAX_EVENTS + 1];//用于通过fd反查proxy_desc_t，文件描述符操作系统公用，所以分开无意义
 enum { 
     payload_size = 1024,
     icmp_echo_request = 8,
@@ -161,52 +163,52 @@ typedef int error_rv_t;
 error_rv_t
 pt_server(serv_conf *conf) 
 {
-
+//open the socket of ICMP with RAW SOCKETS protocol
     int sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
     if (sock < 0) {log_info(); return -1;}
-    int max_sock = sock;
+    int max_sock = sock;//max_sock: If we need a socket to determine where we should start traverse reversely.
 
-    //the part of pcap START
+//the part of pcap START
     pcap_info_t pc;
+
     pc.pcap_err_buf = malloc(PCAP_ERRBUF_SIZE);
-    pc.pcap_data_buf = malloc(pcap_buf_size);
-    pc.pcap_desc = pcap_open_live(conf->pcap_device, pcap_buf_size, 
+    pc.pcap_data_buf = malloc(pcap_buf_size); //capture packets from certain device.
+    pc.pcap_desc = pcap_open_live(conf->pcap_device, pcap_buf_size,
             0/*promiscous*/, 50/*ms*/, pc.pcap_err_buf);
+//if (pc.pcap_desc) {
+    pcap_lookupnet(conf->pcap_device, &pc.netp, 
+                &pc.netmask, pc.pcap_err_buf);
+//        char pcap_filter_program[] = "icmp";
+    pcap_compile(pc.pcap_desc, &pc.fp, 
+                "icmp", 0, pc.netp);
+    pcap_setfilter(pc.pcap_desc, &pc.fp);
+//} 
 
-    if (pc.pcap_desc) {
-        pcap_lookupnet(conf->pcap_device, &pc.netp, &pc.netmask, pc.pcap_err_buf);
-        char pcap_filter_program[] = "icmp";
-        pcap_compile(pc.pcap_desc, &pc.fp, pcap_filter_program, 0, pc.netp);
-        pcap_setfilter(pc.pcap_desc, &pc.fp);
-    } 
-
-    pc.pkt_q.head = 0;
-    pc.pkt_q.tail = 0;
+    pc.pkt_q.head = NULL;
+    pc.pkt_q.tail = NULL;
     pc.pkt_q.elems = 0;
-    //the part of pcap END
+//the part of pcap END
 
     char *buf = malloc(icmp_receive_buf_len);
-    log_info();
 
 //BIIIIIIIIIIIG for-loop
     int epfd = epoll_create1(EPOLL_CLOEXEC);
     struct epoll_event ev;
     struct epoll_event events[MAX_EVENTS];
+
     ev.events = EPOLLIN;
-    ev.data.fd = sock;
+//    ev.data.fd = sock;
     epoll_ctl(epfd, EPOLL_CTL_ADD, sock, &ev);
-
     for (;;) {
-
-        proxy_desc_t *cur = conf->tunnul_desc;
-
-        for (/*LINE136*/ ;cur; cur = cur->next) {
+//        proxy_desc_t *cur = conf->tunnul_desc;
+/*
+        for ( ;cur; cur = cur->next) {
             if (cur->sock) {
                 epoll_ctl(epfd, EPOLL_CTL_ADD, cur->sock, &ev);
                 if (cur->sock >= max_sock) {max_sock = cur->sock + 1;}
             }
         }
-
+*/
         int timeout = 10000;
         int nfds = epoll_wait(epfd, events, MAX_EVENTS, timeout);
         /*
@@ -214,21 +216,21 @@ pt_server(serv_conf *conf)
                 cur && cur->sock; 
                 cur = tmp)  
         */
-        proxy_desc_t *tmp;
-        proxy_desc_t *prev;
-
-        if (cur->should_remove) {
+/*        proxy_desc_t *tmp;
+        proxy_desc_t *prev;*/
+/*
+        if (cur && cur->should_remove) {
             print_statistics();
             tmp = cur->next;
             remove_proxy_desc(cur, prev);
         }
+*/
 /*
         if (!nfds) { 
             continue;
         }//When timeout happens, just continue to next for-loop
 
 */
-        int n = 0;
         /*
         for (cur = conf->tunnul_desc, prev = NULL; cur && cur->sock; cur = tmp, n++) 
         */
@@ -236,6 +238,7 @@ pt_server(serv_conf *conf)
 
         for (int n = 0; n < nfds; n++) {
             if (events[n].data.fd == sock) {//TODO:需要将fd与cur一一映射起来，而不是O(n)搜索
+                //Incoming ICMP_request, maybe new client or client which request to target
                 socklen_t addr_len = sizeof(struct sockaddr);
                 struct sockaddr_in addr;
                 ssize_t bytes = recvfrom(sock, buf, icmp_receive_buf_len, 
@@ -245,17 +248,25 @@ pt_server(serv_conf *conf)
             } 
 
             if (events[n].data.fd < max_sock) {
-                proxy_desc_t *cur = fdlist[events[n].data.fd];
+                //Received data from target host
+                proxy_desc_t *cur = fdlist_translated_to_desc[events[n].data.fd];
                 ssize_t bytes = recv(cur->sock, cur->buf, tcp_receive_buf_len, 0);
                 if (bytes <= 0) {
                     log_info();
-                    tmp = cur->next;
+                    proxy_desc_t *tmp = fdlist_translated_to_desc[events[n].data.fd+1];
+
                     send_termination_msg(cur, sock);
-                    log_info();
+                    max_sock = cur->sock - 1;
+                    log_info();/*When we want to remove a proxy_desc,
+                                 We need to consider socks' data structures
+                                 TODO??
+                                 */
                     remove_proxy_desc(cur, prev);
                     continue;
                 }
-                queue_packet(cur, bytes, 0, 0);
+                //
+                //
+                //queue_packet(cur, bytes, 0);
                 //TODO
             }
 
@@ -270,7 +281,7 @@ pt_server(serv_conf *conf)
 
         if (pcap_dispatch(pc.pcap_desc, 32, pcap_packet_handler, 
                     (u_char *)&pc.pkt_q) > 0) {
-            pqueut_elem_t *cur;
+            pqueue_elem_t *cur;
             struct sockaddr_in addr;
 
             while (pc.pkt_q.head) {
@@ -330,7 +341,7 @@ proxy_desc_t *create_and_insert_proxy_desc(uint16_t id_no, uint16_t icmp_id, int
 }
 
 void handle_data(icmp_echo_packet_t *pkt, int total_len, forward_desc_t *ring[], 
-        int *await_send/*numbers*/, int *insert_idx,  uint16_t *next_expected_seq) {
+        int *await_send/*numbers*/, int *insert_idx,  uint16_t *next_expected_seq) 
 {
     ping_tunnel_pkt_t *pt_pkt = (ping_tunnel_pkt_t *)pkt->data;
     int expected_len = sizeof(ip_packet_t) + sizeof(icmp_echo_packet_t) + sizeof(ping_tunnel_pkt_t);
@@ -519,5 +530,3 @@ void handle_ack(uint16_t seq_no, icmp_desc_t ring[], int *packets_awaiting_ack,
 
     }
 }
-
-
