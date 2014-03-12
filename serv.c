@@ -257,11 +257,11 @@ pt_server(serv_conf *conf)
 
                     send_termination_msg(cur, sock);
                     max_sock = cur->sock - 1;
+                    remove_proxy_desc(cur, prev);
                     log_info();/*When we want to remove a proxy_desc,
                                  We need to consider socks' data structures
                                  TODO??
                                  */
-                    remove_proxy_desc(cur, prev);
                     continue;
                 }
                 //
@@ -335,7 +335,7 @@ proxy_desc_t *create_and_insert_proxy_desc(uint16_t id_no, uint16_t icmp_id, int
     //don't use linked list
     //TODO
     //insert_to_chain(cur);
-    fdlist[id_no] = cur;//insert it to chain
+    fdlist_translated_to_desct[id_no] = cur;//insert it to chain
 
     return cur;
 }
