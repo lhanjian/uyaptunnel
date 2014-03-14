@@ -109,6 +109,7 @@ typedef struct proxy_desc_s {
     uint16_t id_no;//client id
     uint16_t icmp_id;//icmp seq id
     uint16_t pkt_type;//icmp echo/reply
+    uint16_t remote_ack_val;//remote ack
     uint32_t state;//connection state
     uint32_t type_flag;//Proxy/Client
     uint32_t dst_ip;//target
@@ -156,6 +157,7 @@ typedef struct serv_conf_s {
     char *pcap_device;
 //    int max_tunnels;
 } serv_conf;
+
 proxy_desc_t *create_and_insert_proxy_desc(uint16_t id_no, uint16_t icmp_id, int sock, 
         struct sockaddr_in *addr, uint32_t dst_ip, uint32_t dst_port, 
         uint32_t init_state, uint32_t type);
@@ -180,7 +182,7 @@ void handle_ack(uint16_t seq_no, icmp_desc_t ring[],
         uint16_t *remote_ack, int is_pcap);
 
 typedef int error_rv_t;
-
+//START
 error_rv_t
 pt_server(serv_conf *conf) 
 {
@@ -494,8 +496,9 @@ void handle_packet(char *buf, int bytes, int is_pcap,
             if (pt_pkt->state == kProto_data 
                     || pt_pkt->state == kProto_start
                     || pt_pkt->state == kProto_ack) {
-                handle_data((uint16_t)pt_pkt->ack, cur->send_ring, &cur->send_wait_ack, 
-                        0, cur->send_idx, &cur->send_first_ack, &cur->remote_ack_val, is_pcap);
+                handle_data(pkt, (uint16_t)pt_pkt->ack, cur->send_ring, 
+                        &cur->send_wait_ack, 
+                       &cur->send_first_ack, &cur->remote_ack_val);//FLAG
             } 
             handle_ack((uint16_t)pt_pkt->ack, cur->send_ring, 
                     &cur->send_wait_ack, 0,
