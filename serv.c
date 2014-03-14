@@ -92,7 +92,10 @@ typedef struct pcap_info_s {
     char *pcap_data_buf;
     pqueue_t pkt_q;
 } pcap_info_t;
-    
+enum {
+    ping_window_size = 64
+}
+       
 typedef struct proxy_desc_s {
     int sock;
     int bytes;
@@ -108,6 +111,9 @@ typedef struct proxy_desc_s {
     double last_activity;
     struct sockaddr_in dest_addr;
     struct proxy_desc_s *next;
+    icmp_desc_t send_ring[ping_window_size];
+
+    
     //TODO
 } proxy_desc_t;
 
@@ -119,13 +125,21 @@ enum {
     icmp_echo_reply = 0,
     ip_header_size = 20,
     icmp_header_size = 8,
-    ping_window_size = 64,
     tcp_receive_buf_len = (payload_size),
     icmp_receive_buf_len = (   payload_size + ip_header_size 
             + icmp_header_size + sizeof(ping_tunnel_pkt_t)  ),
     pcap_buf_size = (   payload_size + ip_header_size + icmp_header_size
         + sizeof(ping_tunnel_pkt_t)+64  )  * 64,
-    seq_expiry_tbl_length = 65536
+    seq_expiry_tbl_length = 65536,
+
+    kProxy_flag = 0,
+    kUser_flag = 1,
+    kProto_data = 2,
+    kProto_close = 3,
+    kProto_start = 4,
+    kProto_ack = 5,
+    ping_tunnel_magic = 123,
+    kFlag_mask = 0
 };
 
 typedef struct serv_conf_s {
@@ -157,6 +171,9 @@ int queue_packet(int icmp_sock, uint8_t type, char *buf,
         int *first_ack, uint16_t *ping_seq);
 void pcap_packet_handler(u_char *refcon, const struct pcap_pkthdr *hdr, const u_char* pkt);
 void send_termination_msg(proxy_desc_t *cur, int icmp_sock);
+void handle_ack(uint16_t seq_no, icmp_desc_t ring[], 
+        int *packets_awaiting_ack, int one_ack_only, int insert_idx, int *first_ack,
+        uint16_t *remote_ack, int is_pcap);
 
 typedef int error_rv_t;
 
@@ -306,7 +323,10 @@ pt_server(serv_conf *conf)
 }
 
 
-proxy_desc_t *create_and_insert_proxy_desc(uint16_t id_no, uint16_t icmp_id, int sock, struct sockaddr_in *addr, uint32_t dst_ip, uint32_t dst_port, uint32_t init_state, uint32_t type)
+proxy_desc_t *create_and_insert_proxy_desc(uint16_t id_no, uint16_t icmp_id, 
+        int sock, struct sockaddr_in *addr, 
+        uint32_t dst_ip, uint32_t dst_port, 
+        uint32_t init_state, uint32_t type)
 {
     proxy_desc_t *cur = calloc(1, sizeof(proxy_desc_t));
     cur->id_no = id_no;
@@ -332,10 +352,11 @@ proxy_desc_t *create_and_insert_proxy_desc(uint16_t id_no, uint16_t icmp_id, int
     cur->pkt_type = icmp_echo_reply;//proxy
     cur->buf = malloc(icmp_receive_buf_len);
     cur->last_activity = time_as_double();
+    
     //don't use linked list
     //TODO
     //insert_to_chain(cur);
-    fdlist_translated_to_desct[id_no] = cur;//insert it to chain
+    fdlist_translated_to_desc[id_no] = cur;//insert it to chain
 
     return cur;
 }
@@ -410,9 +431,9 @@ void handle_packet(char *buf, int bytes, int is_pcap,
     if (bytes < sizeof(icmp_echo_packet_t) + sizeof(ping_tunnel_pkt_t)) {
        log_info(); 
     } else { 
-        ip_packet_t *ip_pkt = buf;
-        icmp_echo_packet_t *pkt = ip_pkt->data;
-        ping_tunnel_pkt_t *pt_pkt = pkt->data;
+        ip_packet_t *ip_pkt = (ip_packet_t) buf;
+        icmp_echo_packet_t *pkt =(icmp_echo_packet_t) ip_pkt->data;
+        ping_tunnel_pkt_t *pt_pkt = (ping_tunnel_pkt_t) pkt->data;
         
         if (ntohl(pt_pkt->magic) == ping_tunnel_magic) {
             pt_pkt->state = ntohl(pt_pkt->state);
@@ -424,9 +445,10 @@ void handle_packet(char *buf, int bytes, int is_pcap,
             return ;
         }
 
-        proxy_desc_t *cur = id_nolist[pt_pkt->id_no];
+        proxy_desc_t *cur = fdlist_translated_to_desc[pt_pkt->id_no];//TODO
+
+        uint32_t type_flag = cur->type_flag;
         if (cur) {
-            uint32_t type_flag = cur->type_flag;
             if (type_flag == kProxy_flag) {
                 cur->icmp_id = pkt->identifier;
             }
@@ -434,9 +456,11 @@ void handle_packet(char *buf, int bytes, int is_pcap,
             type_flag = kProxy_flag;
         }
 
-        pkt_flag = pt_pkt->state & kFlag_mask;
+        int pkt_flag = pt_pkt->state & kFlag_mask;
         pt_pkt->state &= ~kFlag_mask;
         
+        struct timeval tt;
+
         if (!cur && pkt_flag == kUser_flag && type_flag == kProxy_flag)  {
             pt_pkt->data_len = ntohl(pt_pkt->data_len);
             pt_pkt->ack = ntohl(pt_pkt->ack);
@@ -450,7 +474,7 @@ void handle_packet(char *buf, int bytes, int is_pcap,
              *limit only one Internet destination
              */
             
-            init_state = kProto_data;
+            int init_state = kProto_data;
             cur = create_and_insert_proxy_desc(pt_pkt->id_no, pkt->identifier, 0
                     addr, pt_pkt->dst_ip, ntohl(pt_pkt->dst_port), init_state,
                     kProxy_flag);
@@ -464,7 +488,7 @@ void handle_packet(char *buf, int bytes, int is_pcap,
 
         if (cur && cur->sock) {
             if (pt_pkt->state == kProto_data 
-                    || pt_pkt->state == kProxy_start
+                    || pt_pkt->state == kProto_start
                     || pt_pkt->state == kProto_ack) {
                 handle_data((uint16_t)pt_pkt->ack, cur->send_ring, &cur->send_wait_ack, 
                         0, cur->send_idx, &cur->send_first_ack, &cur->remote_ack_val, is_pcap);
