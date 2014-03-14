@@ -92,28 +92,31 @@ typedef struct pcap_info_s {
     char *pcap_data_buf;
     pqueue_t pkt_q;
 } pcap_info_t;
+
 enum {
     ping_window_size = 64
-}
+};
        
 typedef struct proxy_desc_s {
-    int sock;
-    int bytes;
-    int should_remove;
-    char *buf;
-    uint16_t id_no;
-    uint16_t icmp_id;
-    uint16_t pkt_type;
-    uint32_t state;
-    uint32_t type_flag;
-    uint32_t dst_ip;
-    uint32_t dst_port;
-    double last_activity;
-    struct sockaddr_in dest_addr;
+    int sock;//socket to client
+    int bytes;//receive buffer
+    int should_remove;//this instance should be removed
+    int send_wait_ack;//the number of items in send ring awaiting ack
+    int send_fisrt_ack;//first packet in send ring not acked
+    int send_idx;//first slot
+    int recv_idx;//first slot
+    char *buf;//data buffer(ip/icmp packet) hasn't beed read
+    uint16_t id_no;//client id
+    uint16_t icmp_id;//icmp seq id
+    uint16_t pkt_type;//icmp echo/reply
+    uint32_t state;//connection state
+    uint32_t type_flag;//Proxy/Client
+    uint32_t dst_ip;//target
+    uint32_t dst_port;//target
+    double last_activity;//the last_activity of this instance
+    struct sockaddr_in dest_addr;//dst_ip
     struct proxy_desc_s *next;
     icmp_desc_t send_ring[ping_window_size];
-
-    
     //TODO
 } proxy_desc_t;
 
@@ -475,7 +478,7 @@ void handle_packet(char *buf, int bytes, int is_pcap,
              */
             
             int init_state = kProto_data;
-            cur = create_and_insert_proxy_desc(pt_pkt->id_no, pkt->identifier, 0
+            cur = create_and_insert_proxy_desc(pt_pkt->id_no, pkt->identifier, 0,
                     addr, pt_pkt->dst_ip, ntohl(pt_pkt->dst_port), init_state,
                     kProxy_flag);
         }
@@ -539,7 +542,7 @@ void handle_ack(uint16_t seq_no, icmp_desc_t ring[], int *packets_awaiting_ack,
         }
         */
         if (!one_ack_only) {
-            int ring_i = ring_indexed_by_seq_no(ring, seq_no);
+            int ring_i = ring_index_by_seq_no(ring, seq_no);
 
             if (ring_i) {
                 free(ring[ring_i]->pkt);
