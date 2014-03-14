@@ -107,8 +107,9 @@ typedef struct proxy_desc_s {
     int recv_idx;//first slot in recv
     char *buf;//data buffer(ip/icmp packet) hasn't beed read
     uint16_t id_no;//client id
-    uint16_t icmp_id;//icmp seq id
+    uint16_t icmp_id;//certain icmp identifier
     uint16_t pkt_type;//icmp echo/reply
+    uint16_t my_seq;//icmp sequence number
     uint16_t remote_ack_val;//remote ack
     uint32_t state;//connection state
     uint32_t type_flag;//Proxy/Client
@@ -164,7 +165,7 @@ proxy_desc_t *create_and_insert_proxy_desc(uint16_t id_no, uint16_t icmp_id, int
 forward_desc_t *create_fwd_desc(uint16_t seq_no, uint32_t data_len, char *data);
 
 
-void remove_proxy_desc(proxy_desc_t *cur, proxy_desc_t *prev);
+void remove_proxy_desc(proxy_desc_t *cur/*, proxy_desc_t *prev*/);
 void handle_data(icmp_echo_packet_t *pkt, int total_len, 
         forward_desc_t *ring[], int *await_send, 
         int *insert_idx, uint16_t *next_expected_seq);
@@ -181,13 +182,12 @@ void handle_ack(uint16_t seq_no, icmp_desc_t ring[],
         int *packets_awaiting_ack, int one_ack_only, int insert_idx, int *first_ack,
         uint16_t *remote_ack, int is_pcap);
 
-typedef int error_rv_t;
 //START
-error_rv_t
+int
 pt_server(serv_conf *conf) 
 {
 //open the socket of ICMP with RAW SOCKETS protocol
-    int sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
+    int sock = socket(AF_INET, SOCK_RAW|SOCK_NONBLOCK, IPPROTO_ICMP);
     if (sock < 0) {log_info(); return -1;}
     int max_sock = sock;//max_sock: If we need a socket to determine where we should start traverse reversely.
 
@@ -270,7 +270,7 @@ pt_server(serv_conf *conf)
                 handle_packet(buf, bytes, 0, &addr, sock);
             } 
 
-            if (events[n].data.fd < max_sock) {
+            if (events[n].data.fd < max_sock && cur->send_wait_ack < ping_window_size) {
                 //Received data from target host
                 proxy_desc_t *cur = fdlist_translated_to_desc[events[n].data.fd];
                 ssize_t bytes = recv(cur->sock, cur->buf, tcp_receive_buf_len, 0);
@@ -280,7 +280,7 @@ pt_server(serv_conf *conf)
 
                     send_termination_msg(cur, sock);
                     max_sock = cur->sock - 1;
-                    remove_proxy_desc(cur, prev);
+                    remove_proxy_desc(cur);
                     log_info();/*When we want to remove a proxy_desc,
                                  We need to consider socks' data structures
                                  TODO??
@@ -289,7 +289,22 @@ pt_server(serv_conf *conf)
                 }
                 //
                 //
-                //queue_packet(cur, bytes, 0);
+                queue_packet(cur->sock, cur->pkt_type, cur->buf, 
+                        bytes, //received bytes
+                        cur->id_no, 
+                        cur->icmp_id,
+                        &cur->my_seq,
+                        cur->send_ring,
+                        &cur->send_idx,
+                        &cur->send_wait_ack,
+                        0,//cur->dst_ip,
+                        0,//cur->dst_port,
+                        cur->state | cur->type_flag,
+                        &cur->dest_addr,
+                        cur->next_remote_seq,
+                        &cur->send_first_ack,
+                        &cur->ping_seq
+                        );
                 //TODO
             }
 
