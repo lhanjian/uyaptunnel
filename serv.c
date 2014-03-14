@@ -45,14 +45,15 @@ typedef struct {
     char data[0];
 } __attribute__ ((packed)) ip_packet_t;
 
-typedef struct {
-    uint8_t type;
-    uint8_t code;
-    uint16_t checksum;
+typedef struct icmp_echo_packet_s {
+    uint8_t type;//PING/PONG
+    uint8_t code;//mostly 0
+    uint16_t checksum;//can be 0 because of IP checksum
     uint16_t identifier;
     uint16_t seq;
     char data[0];
 } __attribute__ ((packed)) icmp_echo_packet_t;
+
 typedef struct icmp_desc_s {
     int pkt_len;        // total length of ICMP packet, including ICMP header and ptunnel data.
     double last_resend;
@@ -110,6 +111,7 @@ typedef struct proxy_desc_s {
     uint16_t icmp_id;//certain icmp identifier
     uint16_t pkt_type;//icmp echo/reply
     uint16_t my_seq;//icmp sequence number
+    uint16_t next_remote_seq;//seq of remote need packet
     uint16_t remote_ack_val;//remote ack
     uint32_t state;//connection state
     uint32_t type_flag;//Proxy/Client
@@ -290,19 +292,11 @@ pt_server(serv_conf *conf)
                 //
                 //
                 queue_packet(cur->sock, cur->pkt_type, cur->buf, 
-                        bytes, //received bytes
-                        cur->id_no, 
-                        cur->icmp_id,
-                        &cur->my_seq,
-                        cur->send_ring,
-                        &cur->send_idx,
-                        &cur->send_wait_ack,
-                        0,//cur->dst_ip,
-                        0,//cur->dst_port,
-                        cur->state | cur->type_flag,
-                        &cur->dest_addr,
-                        cur->next_remote_seq,
-                        &cur->send_first_ack,
+                        bytes, cur->id_no, cur->icmp_id, &cur->my_seq,
+                        cur->send_ring, &cur->send_idx, &cur->send_wait_ack,
+                        0,/*cur->dst_ip,*/ 0,/*cur->dst_port,*/
+                        cur->state | cur->type_flag, &cur->dest_addr,
+                        cur->next_remote_seq, &cur->send_first_ack,
                         &cur->ping_seq
                         );
                 //TODO
@@ -575,4 +569,36 @@ void handle_ack(uint16_t seq_no, icmp_desc_t ring[], int *packets_awaiting_ack,
 
 
     }
+}
+
+int queue_packet(int icmp_sock, uint8_t type, char *buf, 
+        int num_bytes, uint16_t id_no, uint16_t icmp_id, 
+        uint16_t *seq, icmp_desc_t ring[], int *insert_idx, 
+        int *await_send, uint32_t ip, uint32_t port, uint32_t state, 
+        struct sockaddr_in *dest_addr, uint16_t next_expected_seq, 
+        int *first_ack, uint16_t *ping_seq) 
+{
+    enum { NORMAL_ICMP_CODE = 0 };
+
+    int pkt_len = sizeof(icmp_echo_packet_t) + sizeof(ping_tunnel_pkt_t) + num_bytes;
+    pkt_len += (pkt_len % 2);
+
+    icmp_echo_packet_t *pkt = malloc(pkt_len);
+    pkt->type = type;
+    pkt->code = NORMAL_ICMP_CODE;//
+    pkt->identifier = htons(icmp_id);
+    pkt->seq = htons(*ping_seq);
+    pkt->checksum = 0;//Not be used because of IP checksum
+
+
+    uint16_t ack_val = next_expected_seq - 1;
+
+
+
+
+    
+    
+
+
+
 }
