@@ -102,9 +102,9 @@ typedef struct proxy_desc_s {
     int bytes;//receive buffer
     int should_remove;//this instance should be removed
     int send_wait_ack;//the number of items in send ring awaiting ack
-    int send_fisrt_ack;//first packet in send ring not acked
-    int send_idx;//first slot
-    int recv_idx;//first slot
+    int send_first_ack;//first packet in send ring not acked
+    int send_idx;//first slot in send 
+    int recv_idx;//first slot in recv
     char *buf;//data buffer(ip/icmp packet) hasn't beed read
     uint16_t id_no;//client id
     uint16_t icmp_id;//icmp seq id
@@ -145,6 +145,7 @@ enum {
     kFlag_mask = 0
 };
 
+double seq_expiry_tbl[seq_expiry_tbl_length];
 typedef struct serv_conf_s {
     uint32_t proxy_ip;//proxy's internet address
     int tcp_listen_port;
@@ -434,9 +435,9 @@ void handle_packet(char *buf, int bytes, int is_pcap,
     if (bytes < sizeof(icmp_echo_packet_t) + sizeof(ping_tunnel_pkt_t)) {
        log_info(); 
     } else { 
-        ip_packet_t *ip_pkt = (ip_packet_t) buf;
-        icmp_echo_packet_t *pkt =(icmp_echo_packet_t) ip_pkt->data;
-        ping_tunnel_pkt_t *pt_pkt = (ping_tunnel_pkt_t) pkt->data;
+        ip_packet_t *ip_pkt = (ip_packet_t *) buf;
+        icmp_echo_packet_t *pkt =(icmp_echo_packet_t *) ip_pkt->data;
+        ping_tunnel_pkt_t *pt_pkt = (ping_tunnel_pkt_t *) pkt->data;
         
         if (ntohl(pt_pkt->magic) == ping_tunnel_magic) {
             pt_pkt->state = ntohl(pt_pkt->state);
@@ -545,12 +546,12 @@ void handle_ack(uint16_t seq_no, icmp_desc_t ring[], int *packets_awaiting_ack,
             int ring_i = ring_index_by_seq_no(ring, seq_no);
 
             if (ring_i) {
-                free(ring[ring_i]->pkt);
-                ring[ring_i]->pkt = NULL;
+                free((ring[ring_i]).pkt);
+                ring[ring_i].pkt = NULL;
                 (*packets_awaiting_ack)--;
                     //send_first_ack
                     //*first_ack 
-                *first_ack = i+1;
+                *first_ack = ring_i+1;
             }
         } 
 
