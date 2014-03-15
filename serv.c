@@ -66,6 +66,7 @@ typedef struct icmp_desc_s {
 void handle_packet(char *buf, int bytes, int is_pcap, 
         struct sockaddr_in *addr, int icmp_sock);
 
+uint16_t calc_icmp_checksum(uint16_t *data, int bytes);
 
 void print_statistics();
 
@@ -584,21 +585,83 @@ int queue_packet(int icmp_sock, uint8_t type, char *buf,
     pkt_len += (pkt_len % 2);
 
     icmp_echo_packet_t *pkt = malloc(pkt_len);
+
     pkt->type = type;
     pkt->code = NORMAL_ICMP_CODE;//
     pkt->identifier = htons(icmp_id);
     pkt->seq = htons(*ping_seq);
-    pkt->checksum = 0;//Not be used because of IP checksum
-
+    pkt->checksum = 0;
+    pkt->checksum = htons(calc_icmp_checksum((uint16_t *)pkt, pkt_len));
+    (*ping_seq)++;
 
     uint16_t ack_val = next_expected_seq - 1;
-
-
-
-
     
-    
+    ping_tunnel_pkt_t *pt_pkt = (ping_tunnel_pkt_t *)pkt->data;
+
+    pt_pkt->magic = htonl(ping_tunnel_magic);
+    pt_pkt->dst_ip = ip;
+    pt_pkt->dst_port = htonl(port);
+    pt_pkt->ack = htonl(ack_val);
+    pt_pkt->data_len = htonl(num_bytes);
+    pt_pkt->state = htonl(state);
+    pt_pkt->seq_no = htons(*seq);
+    pt_pkt->id_no = htons(id_no);
+
+    if (buf && num_bytes > 0) {
+        memcpy(pt_pkt->data, buf, num_bytes);//TODO, maybe just REFERENCE COPY
+    }
+
+    int err = sendto(icmp_sock, pkt, pkt_len, 0, (struct sockaddr *)dest_addr,
+            sizeof(struct sockaddr));
+    if (err < 0) {
+        return -1;
+    } else if (err != pkt_len) {
+        log_info();
+    }
+    icmp_desc_t *ring_i = &ring[*insert_idx];
+
+    ring_i->pkt = pkt;
+    ring_i->pkt_len = pkt_len;
+    ring_i->last_resend = time_as_double();
+    ring_i->seq_no = *seq;
+    ring_i->icmp_id = icmp_id;
+    (*seq)++;
 
 
+
+    return 0;
+}
+
+
+
+
+uint16_t calc_icmp_checksum(uint16_t *data, int bytes)
+{
+    uint32_t sum = 0;
+    uint16_t *w = data;
+    while (bytes > 1) {
+        sum += *w++;
+        bytes -= 2;
+    }
+    uint16_t answer = 0;
+    if (bytes == 1) {
+        *(uint8_t *)(&answer) = *(uint8_t *)w;
+        sum += answer;
+    }
+    sum = (sum >> 16) + (sum & 0xFFFF);
+    sum += (sum >> 16);
+    answer = ~sum;
+
+    return answer;
+}
+        
 
 }
+
+
+
+    
+    
+
+
+
