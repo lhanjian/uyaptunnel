@@ -12,7 +12,7 @@
 
 double time_as_double(void);
 
-typedef struct {
+typedef struct forward_desc_s {
     int seq_no;
     int length;
     int remaining;
@@ -112,16 +112,19 @@ typedef struct proxy_desc_s {
     uint16_t icmp_id;//certain icmp identifier
     uint16_t pkt_type;//icmp echo/reply
     uint16_t my_seq;//icmp sequence number
-    uint16_t next_remote_seq;//seq of remote need packet
+    uint16_t next_remote_seq;//seq of remote needing packet
     uint16_t remote_ack_val;//remote ack
+    uint16_t ping_seq;//ping seq
     uint32_t state;//connection state
     uint32_t type_flag;//Proxy/Client
     uint32_t dst_ip;//target
     uint32_t dst_port;//target
     double last_activity;//the last_activity of this instance
     struct sockaddr_in dest_addr;//dst_ip
+    struct icmp_desc_s send_ring[ping_window_size];//send packet queue to client
+    struct forward_desc_s *recv_ring[ping_window_size];//forward tcp packet to client
+
     struct proxy_desc_s *next;
-    icmp_desc_t send_ring[ping_window_size];
     //TODO
 } proxy_desc_t;
 
@@ -273,7 +276,8 @@ pt_server(serv_conf *conf)
                 handle_packet(buf, bytes, 0, &addr, sock);
             } 
 
-            if (events[n].data.fd < max_sock && cur->send_wait_ack < ping_window_size) {
+            if (events[n].data.fd < max_sock 
+                    /*&& cur->send_wait_ack < ping_window_size*/) {
                 //Received data from target host
                 proxy_desc_t *cur = fdlist_translated_to_desc[events[n].data.fd];
                 ssize_t bytes = recv(cur->sock, cur->buf, tcp_receive_buf_len, 0);
@@ -297,8 +301,7 @@ pt_server(serv_conf *conf)
                         cur->send_ring, &cur->send_idx, &cur->send_wait_ack,
                         0,/*cur->dst_ip,*/ 0,/*cur->dst_port,*/
                         cur->state | cur->type_flag, &cur->dest_addr,
-                        cur->next_remote_seq, &cur->send_first_ack,
-                        &cur->ping_seq
+                        cur->next_remote_seq, &cur->send_first_ack, &cur->ping_seq
                         );
                 //TODO
             }
@@ -506,9 +509,9 @@ void handle_packet(char *buf, int bytes, int is_pcap,
             if (pt_pkt->state == kProto_data 
                     || pt_pkt->state == kProto_start
                     || pt_pkt->state == kProto_ack) {
-                handle_data(pkt, (uint16_t)pt_pkt->ack, cur->send_ring, 
-                        &cur->send_wait_ack, 
-                       &cur->send_first_ack, &cur->remote_ack_val);//FLAG
+                handle_data(pkt, (uint16_t)pt_pkt->ack, cur->recv_ring, 
+                        &cur->recv_wait_ack, 
+                       &cur->recv_idx, &cur->next_remote_seq);//FLAG
             } 
             handle_ack((uint16_t)pt_pkt->ack, cur->send_ring, 
                     &cur->send_wait_ack, 0,
@@ -583,7 +586,7 @@ int queue_packet(int icmp_sock, uint8_t type, char *buf,
 
     int pkt_len = sizeof(icmp_echo_packet_t) + sizeof(ping_tunnel_pkt_t) + num_bytes;
     pkt_len += (pkt_len % 2);
-
+//construct packet
     icmp_echo_packet_t *pkt = malloc(pkt_len);
 
     pkt->type = type;
@@ -610,24 +613,31 @@ int queue_packet(int icmp_sock, uint8_t type, char *buf,
     if (buf && num_bytes > 0) {
         memcpy(pt_pkt->data, buf, num_bytes);//TODO, maybe just REFERENCE COPY
     }
-
-    int err = sendto(icmp_sock, pkt, pkt_len, 0, (struct sockaddr *)dest_addr,
-            sizeof(struct sockaddr));
+//sendto dest
+    int err = sendto(icmp_sock, pkt, pkt_len, 0, 
+            (struct sockaddr *)dest_addr, sizeof(struct sockaddr));
     if (err < 0) {
         return -1;
     } else if (err != pkt_len) {
         log_info();
     }
     icmp_desc_t *ring_i = &ring[*insert_idx];
-
-    ring_i->pkt = pkt;
-    ring_i->pkt_len = pkt_len;
-    ring_i->last_resend = time_as_double();
-    ring_i->seq_no = *seq;
-    ring_i->icmp_id = icmp_id;
+//queue pkt to send_ring
+    ring[*insert_idx].pkt = pkt;
+    ring[*insert_idx].pkt_len = pkt_len;
+    ring[*insert_idx].last_resend = time_as_double();
+    ring[*insert_idx].seq_no = *seq;
+    ring[*insert_idx].icmp_id = icmp_id;
     (*seq)++;
 
-
+    if (!ring[*first_ack].pkt) {//around
+        *first_ack = *insert_idx;
+    }
+    (*await_send)++;//add 1 to number of awaiting
+    (*insert_idx)++;//index of insert_idx
+    if (*insert_idx >= ping_window_size) {
+        *insert_idx = 0;
+    }
 
     return 0;
 }
@@ -656,7 +666,6 @@ uint16_t calc_icmp_checksum(uint16_t *data, int bytes)
 }
         
 
-}
 
 
 
