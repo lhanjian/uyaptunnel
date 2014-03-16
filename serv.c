@@ -103,8 +103,9 @@ typedef struct proxy_desc_s {
     int sock;//socket to client
     int bytes;//receive buffer
     int should_remove;//this instance should be removed
+    int send_first_ack;//the number of items in recv ring awaiting send
     int send_wait_ack;//the number of items in send ring awaiting ack
-    int send_first_ack;//first packet in send ring not acked
+    int recv_wait_send;//the number of items in send ring awaiting ack
     int send_idx;//first slot in send 
     int recv_idx;//first slot in recv
     char *buf;//data buffer(ip/icmp packet) hasn't beed read
@@ -202,7 +203,7 @@ pt_server(serv_conf *conf)
 
     pc.pcap_err_buf = malloc(PCAP_ERRBUF_SIZE);
     pc.pcap_data_buf = malloc(pcap_buf_size); //capture packets from certain device.
-    pc.pcap_desc = pcap_open_live(conf->pcap_device, pcap_buf_size,
+    pc.pcap_desc = pcap_open_live(conf->pcap_device/*TODO*/, pcap_buf_size,
             0/*promiscous*/, 50/*ms*/, pc.pcap_err_buf);
 //if (pc.pcap_desc) {
     pcap_lookupnet(conf->pcap_device, &pc.netp, 
@@ -510,7 +511,7 @@ void handle_packet(char *buf, int bytes, int is_pcap,
                     || pt_pkt->state == kProto_start
                     || pt_pkt->state == kProto_ack) {
                 handle_data(pkt, (uint16_t)pt_pkt->ack, cur->recv_ring, 
-                        &cur->recv_wait_ack, 
+                        &cur->recv_wait_send, 
                        &cur->recv_idx, &cur->next_remote_seq);//FLAG
             } 
             handle_ack((uint16_t)pt_pkt->ack, cur->send_ring, 
@@ -559,6 +560,9 @@ void handle_ack(uint16_t seq_no, icmp_desc_t ring[], int *packets_awaiting_ack,
         }
         */
         if (!one_ack_only) {
+
+            int ring_index_by_seq_no(icmp_desc_t ring[], int seq_no);//Define TODO should be moved
+
             int ring_i = ring_index_by_seq_no(ring, seq_no);
 
             if (ring_i) {
