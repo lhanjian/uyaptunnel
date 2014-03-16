@@ -96,7 +96,8 @@ typedef struct pcap_info_s {
 } pcap_info_t;
 
 enum {
-    ping_window_size = 64
+    ping_window_size = 64,
+    auto_close_timeout = 60 
 };
        
 typedef struct proxy_desc_s {
@@ -131,6 +132,8 @@ typedef struct proxy_desc_s {
 
 #define MAX_EVENTS (600)
 proxy_desc_t *fdlist_translated_to_desc[MAX_EVENTS + 1];//用于通过fd反查proxy_desc_t，文件描述符操作系统公用，所以分开无意义
+proxy_desc_t *id_no_translated_to_desc[MAX_EVENTS + 1];//用于通过id_no反查proxy_desc_t
+
 enum { 
     payload_size = 1024,
     icmp_echo_request = 8,
@@ -164,7 +167,7 @@ typedef struct serv_conf_s {
     proxy_desc_t *tunnul_desc;
     char *pcap_device;
 //    int max_tunnels;
-} serv_conf;
+} serv_conf_t;
 
 proxy_desc_t *create_and_insert_proxy_desc(uint16_t id_no, uint16_t icmp_id, int sock, 
         struct sockaddr_in *addr, uint32_t dst_ip, uint32_t dst_port, 
@@ -191,7 +194,7 @@ void handle_ack(uint16_t seq_no, icmp_desc_t ring[],
 
 //START
 int
-pt_server(serv_conf *conf) 
+pt_server(serv_conf_t *conf) 
 {
 //open the socket of ICMP with RAW SOCKETS protocol
     int sock = socket(AF_INET, SOCK_RAW|SOCK_NONBLOCK, IPPROTO_ICMP);
@@ -312,6 +315,23 @@ pt_server(serv_conf *conf)
         conf->now = time_as_double();
 
         void find_no_activity_to_close();//TODO
+        //Need test the last client requesting time whether greater than the timeout
+//{
+        proxy_desc_t *the_max_timer_in_conf(serv_conf_t *);//NOW CODING
+        proxy_desc_t *the_next_timer_in_conf(serv_conf_t *);//NOW CODING
+
+        proxy_desc_t *cur_timer = the_max_timer_in_conf(conf);
+        for (double time_delta = conf->now - cur_timer->last_activity;
+                cur_timer; cur_timer = the_next_timer_in_conf(conf)) {
+            if (time_delta > auto_close_timeout) {
+                remove_proxy_desc(cur_timer);
+            }
+        }
+
+//}
+            
+
+
         void send_waiting_packet();
         void resend_packet_requiring_resend();
         void send_explicit_ack();
@@ -502,7 +522,7 @@ void handle_packet(char *buf, int bytes, int is_pcap,
 
         if (cur && pt_pkt->state == kProto_close) {
             log_info();
-            cur->should_remove = 1;
+            remove_proxy_desc(cur);
             return ;
         }
 
@@ -561,7 +581,7 @@ void handle_ack(uint16_t seq_no, icmp_desc_t ring[], int *packets_awaiting_ack,
         */
         if (!one_ack_only) {
 
-            int ring_index_by_seq_no(icmp_desc_t ring[], int seq_no);//Define TODO should be moved
+int ring_index_by_seq_no(icmp_desc_t ring[], int seq_no);//Define TODO should be moved
 
             int ring_i = ring_index_by_seq_no(ring, seq_no);
 
@@ -670,7 +690,18 @@ uint16_t calc_icmp_checksum(uint16_t *data, int bytes)
 }
         
 
+void remove_proxy_desc(proxy_desc_t *cur) 
+{
+    struct timeval tt;
+    gettimeofday(&tt, 0);
+    seq_expiry_tbl[cur->id_no] = tt.tv_sec + (2 * auto_close_timeout);
 
+    if (cur->buf) /**/ {
+        free(cur->buf);
+    }
+    cur->buf = NULL;
+
+}
 
 
     
