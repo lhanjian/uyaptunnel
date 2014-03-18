@@ -131,7 +131,7 @@ typedef struct proxy_desc_s {
 } proxy_desc_t;
 
 #define MAX_EVENTS (600)
-proxy_desc_t *fdlist_translated_to_desc[MAX_EVENTS + 1];//用于通过fd反查proxy_desc_t，文件描述符操作系统公用，所以分开无意义
+proxy_desc_t *fdlist_translated_to_desc[MAX_EVENTS + 1];//用于通过fd反查proxy_desc_t，文件描述符
 proxy_desc_t *id_no_translated_to_desc[MAX_EVENTS + 1];//用于通过id_no反查proxy_desc_t
 
 enum { 
@@ -166,6 +166,8 @@ typedef struct serv_conf_s {
     double now;
     proxy_desc_t *tunnul_desc;
     char *pcap_device;
+    proxy_desc_t *fdlist;
+    proxy_desc_t *id_no;
 //    int max_tunnels;
 } serv_conf_t;
 
