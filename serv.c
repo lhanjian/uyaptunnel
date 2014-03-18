@@ -79,7 +79,7 @@ typedef struct pqueue_elem_s {
     char data[0];
 } pqueue_elem_t;
 
-typedef struct {
+typedef struct pqueue_s{
     pqueue_elem_t *head;
     pqueue_elem_t *tail;
     int elems;
@@ -96,6 +96,7 @@ typedef struct pcap_info_s {
 } pcap_info_t;
 
 enum {
+    ether_header_length = 32,
     ping_window_size = 64,
     auto_close_timeout = 60 
 };
@@ -243,15 +244,7 @@ pt_server(serv_conf_t *conf)
 //    ev.data.fd = sock;
     epoll_ctl(epfd, EPOLL_CTL_ADD, sock, &ev);
     for (;;) {
-//        proxy_desc_t *cur = conf->tunnul_desc;
-/*
-        for ( ;cur; cur = cur->next) {
-            if (cur->sock) {
-                epoll_ctl(epfd, EPOLL_CTL_ADD, cur->sock, &ev);
-                if (cur->sock >= max_sock) {max_sock = cur->sock + 1;}
-            }
-        }
-*/
+
         int timeout = 10000;
         int nfds = epoll_wait(epfd, events, MAX_EVENTS, timeout);
 
@@ -259,15 +252,16 @@ pt_server(serv_conf_t *conf)
                 cur && cur->should_remove; 
                 cur = proxy_should_removed_queue_next(conf)) 
         {
-        //    tmp = cur->next;
-            remove_proxy_desc(cur, prev);
+            remove_proxy_desc(cur);
         }
 
         //When timeout happens, just continue to next for-loop
 
         for (int n = 0; n < nfds; n++) {
-            if (events[n].data.fd == sock) {//TODO:需要将fd与cur一一映射起来，而不是O(n)搜索
-                //Incoming ICMP_request, maybe new client or client which request to target
+            if (events[n].data.fd == sock) {
+                //TODO:需要将fd与cur一一映射起来，而不是O(n)搜索
+                //Incoming ICMP_request, maybe new client or client 
+                //which request to target
                 socklen_t addr_len = sizeof(struct sockaddr);
                 struct sockaddr_in addr;
                 ssize_t bytes = recvfrom(sock, buf, icmp_receive_buf_len, 
@@ -315,7 +309,6 @@ pt_server(serv_conf_t *conf)
 
         void find_no_activity_to_close();//TODO
         //Need test the last client requesting time whether greater than the timeout
-//{
         proxy_desc_t *the_max_timer_in_conf(serv_conf_t *);//NOW CODING
         proxy_desc_t *the_next_timer_in_conf(serv_conf_t *);//NOW CODING
 
@@ -330,10 +323,6 @@ pt_server(serv_conf_t *conf)
                 */
             }
         }
-
-//}
-            
-
 
         void send_waiting_packet();
         void resend_packet_requiring_resend();
@@ -360,6 +349,7 @@ pt_server(serv_conf_t *conf)
         }
 
     
+    }
 }
             
 
@@ -702,11 +692,8 @@ void remove_proxy_desc(proxy_desc_t *cur)
     gettimeofday(&tt, 0);
     seq_expiry_tbl[cur->id_no] = tt.tv_sec + (2 * auto_close_timeout);
 
-    if (cur->buf) /**/ {
-        free(cur->buf);
-    }
+    if (cur->buf) /**/ { free(cur->buf); }
     cur->buf = NULL;
-
 }
 
 
@@ -714,4 +701,27 @@ void remove_proxy_desc(proxy_desc_t *cur)
     
 
 
-
+void pcap_packet_handler(unsigned char *refcon, 
+        const struct pcap_pkthdr *hdr,
+        const u_char *pkt)
+{
+    pqueue_t *q = refcon;
+    pqueue_elem_t *elem = malloc(sizeof(pqueue_elem_t) + hdr->caplen - ether_header_length);
+    memcpy(elem->data, pkt + ether_header_length, hdr->caplen - ether_header_length);
+    ip_packet_t *ip_pkt = elem->data;
+    //TODO: fragment support
+    elem->bytes = ntohs(ip_pkt->pkt_len);
+    if (elem->bytes > hdr->caplen - ether_header_length) {
+        free(elem);
+        return;
+    }
+    elem->next = NULL;
+    if (q->tail) {
+        q->tail->next = elem;
+        q->tail = elem;
+    } else {
+        q->head = elem;
+        q->tail = elem;
+    }
+    q->elems++;
+}
