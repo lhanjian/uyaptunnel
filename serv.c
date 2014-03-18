@@ -166,14 +166,19 @@ typedef struct serv_conf_s {
     double now;
     proxy_desc_t *tunnul_desc;
     char *pcap_device;
-    proxy_desc_t *fdlist;
-    proxy_desc_t *id_no;
+    proxy_desc_t *fd_list;
+    proxy_desc_t *id_no_list;
 //    int max_tunnels;
 } serv_conf_t;
+
+
+proxy_desc_t *proxy_should_removed_queue(serv_conf_t *cur);
+proxy_desc_t *proxy_should_removed_queue_next(serv_conf_t *cur);
 
 proxy_desc_t *create_and_insert_proxy_desc(uint16_t id_no, uint16_t icmp_id, int sock, 
         struct sockaddr_in *addr, uint32_t dst_ip, uint32_t dst_port, 
         uint32_t init_state, uint32_t type);
+
 forward_desc_t *create_fwd_desc(uint16_t seq_no, uint32_t data_len, char *data);
 
 
@@ -181,7 +186,9 @@ void remove_proxy_desc(proxy_desc_t *cur/*, proxy_desc_t *prev*/);
 void handle_data(icmp_echo_packet_t *pkt, int total_len, 
         forward_desc_t *ring[], int *await_send, 
         int *insert_idx, uint16_t *next_expected_seq);
-//proxy_desc_t* create_and_insert_proxy_desc(uint16_t id_no, uint16_t icmp_id, int sock, struct sockaddr_in *addr, uint32_t dst_ip, uint32_t dst_port, uint32_t init_state, uint32_t type);
+//proxy_desc_t* create_and_insert_proxy_desc(uint16_t id_no, uint16_t icmp_id, 
+//int sock, struct sockaddr_in *addr, uint32_t dst_ip, uint32_t dst_port, 
+//uint32_t init_state, uint32_t type);
 int queue_packet(int icmp_sock, uint8_t type, char *buf, 
         int num_bytes, uint16_t id_no, uint16_t icmp_id, 
         uint16_t *seq, icmp_desc_t ring[], int *insert_idx, 
@@ -201,7 +208,8 @@ pt_server(serv_conf_t *conf)
 //open the socket of ICMP with RAW SOCKETS protocol
     int sock = socket(AF_INET, SOCK_RAW|SOCK_NONBLOCK, IPPROTO_ICMP);
     if (sock < 0) {log_info(); return -1;}
-    int max_sock = sock;//max_sock: If we need a socket to determine where we should start traverse reversely.
+    int max_sock = sock;//max_sock: If we need a socket to determine 
+    //where we should start traverse reversely.
 
 //the part of pcap START
     pcap_info_t pc;
@@ -246,30 +254,16 @@ pt_server(serv_conf_t *conf)
 */
         int timeout = 10000;
         int nfds = epoll_wait(epfd, events, MAX_EVENTS, timeout);
-        /*
-        for (prev = 0, cur = conf->tunnul_desc; 
-                cur && cur->sock; 
-                cur = tmp)  
-        */
-/*        proxy_desc_t *tmp;
-        proxy_desc_t *prev;*/
-/*
-        if (cur && cur->should_remove) {
-            print_statistics();
-            tmp = cur->next;
+
+        for (proxy_desc_t *cur = proxy_should_removed_queue(conf); 
+                cur && cur->should_remove; 
+                cur = proxy_should_removed_queue_next(conf)) 
+        {
+        //    tmp = cur->next;
             remove_proxy_desc(cur, prev);
         }
-*/
-/*
-        if (!nfds) { 
-            continue;
-        }//When timeout happens, just continue to next for-loop
 
-*/
-        /*
-        for (cur = conf->tunnul_desc, prev = NULL; cur && cur->sock; cur = tmp, n++) 
-        */
-/*            int fd_now = events[n].datacreate_and_insert_proxy_desc.fd;*/
+        //When timeout happens, just continue to next for-loop
 
         for (int n = 0; n < nfds; n++) {
             if (events[n].data.fd == sock) {//TODO:需要将fd与cur一一映射起来，而不是O(n)搜索
@@ -291,9 +285,12 @@ pt_server(serv_conf_t *conf)
                     log_info();
                     proxy_desc_t *tmp = fdlist_translated_to_desc[events[n].data.fd+1];
 
+                    cur->should_remove = 1;
+                    /*
                     send_termination_msg(cur, sock);
                     max_sock = cur->sock - 1;
                     remove_proxy_desc(cur);
+                    */
                     log_info();/*When we want to remove a proxy_desc,
                                  We need to consider socks' data structures
                                  TODO??
@@ -322,11 +319,15 @@ pt_server(serv_conf_t *conf)
         proxy_desc_t *the_max_timer_in_conf(serv_conf_t *);//NOW CODING
         proxy_desc_t *the_next_timer_in_conf(serv_conf_t *);//NOW CODING
 
-        proxy_desc_t *cur_timer = the_max_timer_in_conf(conf);
-        for (double time_delta = conf->now - cur_timer->last_activity;
-                cur_timer; cur_timer = the_next_timer_in_conf(conf)) {
+        proxy_desc_t *cur = the_max_timer_in_conf(conf);
+        for (double time_delta = conf->now - cur->last_activity;
+                cur; cur = the_next_timer_in_conf(conf)) {
             if (time_delta > auto_close_timeout) {
-                remove_proxy_desc(cur_timer);
+                cur->should_remove = 1;
+                /*
+                send_termination_msg(cur, sock);
+                remove_proxy_desc(cur);
+                */
             }
         }
 
@@ -358,11 +359,10 @@ pt_server(serv_conf_t *conf)
             pc.pkt_q.head = 0;
         }
 
-    }
     
+}
             
 
-}
 
 
 proxy_desc_t *create_and_insert_proxy_desc(uint16_t id_no, uint16_t icmp_id, 
@@ -524,7 +524,11 @@ void handle_packet(char *buf, int bytes, int is_pcap,
 
         if (cur && pt_pkt->state == kProto_close) {
             log_info();
+            cur->should_remove = 1;
+            /*
+            send_termination_msg(cur, sock);
             remove_proxy_desc(cur);
+            */
             return ;
         }
 
