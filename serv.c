@@ -128,12 +128,17 @@ typedef struct proxy_desc_s {
     struct forward_desc_s *recv_ring[ping_window_size];//forward tcp packet to client
 
     struct proxy_desc_s *next;
+
+    struct serv_conf_s *conf;
     //TODO
 } proxy_desc_t;
 
+//START: maybe dangerous race condition after removed and reinsert desc in it
 #define MAX_EVENTS (600)
 proxy_desc_t *fdlist_translated_to_desc[MAX_EVENTS + 1];//用于通过fd反查proxy_desc_t，文件描述符
 proxy_desc_t *id_no_translated_to_desc[MAX_EVENTS + 1];//用于通过id_no反查proxy_desc_t
+//END: maybe dangerous race condition
+
 
 enum { 
     payload_size = 1024,
@@ -511,7 +516,9 @@ void handle_packet(char *buf, int bytes, int is_pcap,
             cur = create_and_insert_proxy_desc(pt_pkt->id_no, pkt->identifier, 0,
                     addr, pt_pkt->dst_ip, ntohl(pt_pkt->dst_port), init_state,
                     kProxy_flag);
-            int insert_to_chain(cur);//TODO 
+
+            //int insert_to_chain(proxy_desc_t *cur);//TODO 
+            id_no_translated_to_desc[pt_pkt->id_no] = cur;
         }
 
         if (cur && pt_pkt->state == kProto_close) {
