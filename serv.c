@@ -187,9 +187,7 @@ void remove_proxy_desc(proxy_desc_t *cur/*, proxy_desc_t *prev*/);
 void handle_data(icmp_echo_packet_t *pkt, int total_len, 
         forward_desc_t *ring[], int *await_send, 
         int *insert_idx, uint16_t *next_expected_seq);
-//proxy_desc_t* create_and_insert_proxy_desc(uint16_t id_no, uint16_t icmp_id, 
-//int sock, struct sockaddr_in *addr, uint32_t dst_ip, uint32_t dst_port, 
-//uint32_t init_state, uint32_t type);
+
 int queue_packet(int icmp_sock, uint8_t type, char *buf, 
         int num_bytes, uint16_t id_no, uint16_t icmp_id, 
         uint16_t *seq, icmp_desc_t ring[], int *insert_idx, 
@@ -201,6 +199,8 @@ void send_termination_msg(proxy_desc_t *cur, int icmp_sock);
 void handle_ack(uint16_t seq_no, icmp_desc_t ring[], 
         int *packets_awaiting_ack, int one_ack_only, int insert_idx, int *first_ack,
         uint16_t *remote_ack, int is_pcap);
+
+int ring_index_by_seq_no(icmp_desc_t ring[], int seq_no);//Define TODO should be moved
 
 //START
 int
@@ -387,8 +387,9 @@ proxy_desc_t *create_and_insert_proxy_desc(uint16_t id_no, uint16_t icmp_id,
     
     //don't use linked list
     //TODO
-    //insert_to_chain(cur);
-    fdlist_translated_to_desc[id_no] = cur;//insert it to chain
+
+//    int insert_to_chain(cur);
+//    fdlist_translated_to_desc[id_no] = cur;//insert it to chain
 
     return cur;
 }
@@ -477,7 +478,7 @@ void handle_packet(char *buf, int bytes, int is_pcap,
             return ;
         }
 
-        proxy_desc_t *cur = fdlist_translated_to_desc[pt_pkt->id_no];//TODO
+        proxy_desc_t *cur = id_no_translated_to_desc[pt_pkt->id_no];//TODO
 
         uint32_t type_flag = cur->type_flag;
         if (cur) {
@@ -510,6 +511,7 @@ void handle_packet(char *buf, int bytes, int is_pcap,
             cur = create_and_insert_proxy_desc(pt_pkt->id_no, pkt->identifier, 0,
                     addr, pt_pkt->dst_ip, ntohl(pt_pkt->dst_port), init_state,
                     kProxy_flag);
+            int insert_to_chain(cur);//TODO 
         }
 
         if (cur && pt_pkt->state == kProto_close) {
@@ -546,8 +548,9 @@ forward_desc_t* create_fwd_desc(uint16_t seq_no, uint32_t data_len, char *data)
     fwd_desc->seq_no = seq_no;
     fwd_desc->length = data_len;
     fwd_desc->remaining = data_len;
-
-    if (data_len > 0) {memcpy(fwd_desc->data, data, data_len);}//TODO , more performance
+    if (data_len > 0) {   
+        memcpy(fwd_desc->data, data, data_len);
+    }//can't be optimization
 
     return fwd_desc;
 }
@@ -577,7 +580,6 @@ void handle_ack(uint16_t seq_no, icmp_desc_t ring[], int *packets_awaiting_ack,
         */
         if (!one_ack_only) {
 
-int ring_index_by_seq_no(icmp_desc_t ring[], int seq_no);//Define TODO should be moved
 
             int ring_i = ring_index_by_seq_no(ring, seq_no);
 
@@ -705,10 +707,10 @@ void pcap_packet_handler(unsigned char *refcon,
         const struct pcap_pkthdr *hdr,
         const u_char *pkt)
 {
-    pqueue_t *q = refcon;
+    pqueue_t *q = (pqueue_t *)refcon;
     pqueue_elem_t *elem = malloc(sizeof(pqueue_elem_t) + hdr->caplen - ether_header_length);
     memcpy(elem->data, pkt + ether_header_length, hdr->caplen - ether_header_length);
-    ip_packet_t *ip_pkt = elem->data;
+    ip_packet_t *ip_pkt = (ip_packet_t *)elem->data;
     //TODO: fragment support
     elem->bytes = ntohs(ip_pkt->pkt_len);
     if (elem->bytes > hdr->caplen - ether_header_length) {
@@ -724,4 +726,12 @@ void pcap_packet_handler(unsigned char *refcon,
         q->tail = elem;
     }
     q->elems++;
+}
+
+int ring_index_by_seq_no(icmp_desc_t ring[], int seq_no)//Define TODO should be moved
+{
+    int ring_index;
+
+
+    return ring_index;
 }
