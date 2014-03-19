@@ -210,7 +210,7 @@ int ring_index_by_seq_no(icmp_desc_t ring[], int seq_no);//Define TODO should be
 
 //START
 int
-pt_server(serv_conf_t *conf) 
+uyapt_server(serv_conf_t *conf) 
 {
 //open the socket of ICMP with RAW SOCKETS protocol
     int sock = socket(AF_INET, SOCK_RAW|SOCK_NONBLOCK, IPPROTO_ICMP);
@@ -319,8 +319,8 @@ pt_server(serv_conf_t *conf)
         proxy_desc_t *the_next_timer_in_conf(serv_conf_t *);//NOW CODING
 
         proxy_desc_t *cur = the_max_timer_in_conf(conf);
-        for (double time_delta = conf->now - cur->last_activity;
-                cur; cur = the_next_timer_in_conf(conf)) {
+        for (; cur; cur = the_next_timer_in_conf(conf)) {
+            double time_delta = conf->now - cur->last_activity;
             if (time_delta > auto_close_timeout) {
                 cur->should_remove = 1;
                 /*
@@ -331,6 +331,17 @@ pt_server(serv_conf_t *conf)
         }
 
         void send_waiting_packet();
+        int send_packets(forward_desc_t *ring[], int *xfer_idx, int *await_send, int *sock);
+        
+        proxy_desc_t *recv_wait_send();
+        for (proxy_desc_t *cur = recv_wait_send(conf);
+                cur;
+                proxy_desc_t *cur = recv_wait_send_next(conf)) { 
+            if (cur->recv_wait_send && cur->sock) {
+                send_packets(&cur->recv_ring, &cur->recv_xfer_idx, &cur->recv_wait_send, &cur->sock);
+            }
+        }
+        
         void resend_packet_requiring_resend();
         void send_explicit_ack();
 
@@ -550,7 +561,7 @@ void handle_packet(char *buf, int bytes, int is_pcap,
 
 }
 
-forward_desc_t* create_fwd_desc(uint16_t seq_no, uint32_t data_len, char *data)
+forward_desc_t *create_fwd_desc(uint16_t seq_no, uint32_t data_len, char *data)
 {
     forward_desc_t *fwd_desc = malloc(sizeof(forward_desc_t)+data_len);
     fwd_desc->seq_no = seq_no;
@@ -587,8 +598,6 @@ void handle_ack(uint16_t seq_no, icmp_desc_t ring[], int *packets_awaiting_ack,
         }
         */
         if (!one_ack_only) {
-
-
             int ring_i = ring_index_by_seq_no(ring, seq_no);
 
             if (ring_i) {
@@ -600,7 +609,6 @@ void handle_ack(uint16_t seq_no, icmp_desc_t ring[], int *packets_awaiting_ack,
                 *first_ack = ring_i+1;
             }
         } 
-
 
     }
 }
@@ -683,6 +691,7 @@ uint16_t calc_icmp_checksum(uint16_t *data, int bytes)
         sum += *w++;
         bytes -= 2;
     }
+
     uint16_t answer = 0;
     if (bytes == 1) {
         *(uint8_t *)(&answer) = *(uint8_t *)w;
@@ -700,6 +709,7 @@ void remove_proxy_desc(proxy_desc_t *cur)
 {
     struct timeval tt;
     gettimeofday(&tt, 0);
+
     seq_expiry_tbl[cur->id_no] = tt.tv_sec + (2 * auto_close_timeout);
 
     if (cur->buf) /**/ { free(cur->buf); }
@@ -715,12 +725,12 @@ void remove_proxy_desc(proxy_desc_t *cur)
         }
         cur->recv_ring[i] = NULL;//if it has data, but its data equal to NULL???
     }
-    fdlist_translated_to_desc[cur->fd] = NULL;
-    id_no_translated_to_desc[cur->fd] = NULL;
+//    fdlist_translated_to_desc[cur->sock] = NULL;
+    id_no_translated_to_desc[cur->id_no] = NULL;
 
     close(cur->sock);
     cur->sock = 0;
-    
+    free(cur);
 }
 
 
@@ -760,3 +770,32 @@ int ring_index_by_seq_no(icmp_desc_t ring[], int seq_no)//Define TODO should be 
 
     return ring_index;
 }
+
+//What's the *** xfer_idx ?
+int send_packets(forward_desc_t *ring[], int  *xfer_idx, int *await_send, int *sock)
+{
+    int bytes;
+    int total = 0;
+    forward_desc_t *fwd_desc;
+
+    while (*await_send > 0) {
+        fwd_desc = ring[*xfer_idx];
+        if (!fwd_desc) break;
+        if (fwd_desc->length > 0) {
+            bytes = send(*sock, &fwd_desc->data[fwd_desc->length - fwd_desc->remaining], fwd_desc->remaining, 0);
+            if (bytes < 0) {
+                close(*sock);
+                *sock = 0;
+                break;
+            }
+        }
+        fwd_desc->remaining -= bytes;
+        total += bytes;
+    } else {
+        break;
+    }
+
+    return total;
+}
+        
+        
