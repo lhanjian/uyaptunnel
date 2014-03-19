@@ -2,6 +2,7 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <sys/types.h>
+#include <unistd.h>
 #include <netinet/in.h>
 #include <string.h>
 #include <stdlib.h>
@@ -129,7 +130,7 @@ typedef struct proxy_desc_s {
 
     struct proxy_desc_s *next;
 
-    struct serv_conf_s *conf;
+    //struct serv_conf_s *conf;
     //TODO
 } proxy_desc_t;
 
@@ -703,6 +704,23 @@ void remove_proxy_desc(proxy_desc_t *cur)
 
     if (cur->buf) /**/ { free(cur->buf); }
     cur->buf = NULL;
+
+    for (int i = 0; i < ping_window_size; i++) {
+        if (cur->send_ring[i].pkt) {
+            free(cur->send_ring[i].pkt);
+        }
+        cur->send_ring[i].pkt = NULL;//if it has data, but its data equal to NULL???
+        if (cur->recv_ring[i]) {
+            free(cur->recv_ring[i]);
+        }
+        cur->recv_ring[i] = NULL;//if it has data, but its data equal to NULL???
+    }
+    fdlist_translated_to_desc[cur->fd] = NULL;
+    id_no_translated_to_desc[cur->fd] = NULL;
+
+    close(cur->sock);
+    cur->sock = 0;
+    
 }
 
 
