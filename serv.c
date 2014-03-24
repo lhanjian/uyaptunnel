@@ -246,7 +246,8 @@ uyapt_server(serv_conf_t *conf)
     struct epoll_event ev;
     struct epoll_event events[MAX_EVENTS];
 
-    ev.events = EPOLLIN;
+    ev.events = EPOLLIN|EPOLLOUT;
+    ev.data.fd = sock;
 //    ev.data.fd = sock;
     epoll_ctl(epfd, EPOLL_CTL_ADD, sock, &ev);
     for (;;) {
@@ -274,20 +275,17 @@ uyapt_server(serv_conf_t *conf)
                         0, (struct sockaddr *)&addr, &addr_len);
                 log_info();
                 handle_packet(buf, bytes, 0, &addr, sock);
-            } 
-
-            if (events[n].data.fd < max_sock 
-                    /*&& cur->send_wait_ack < ping_window_size*/) {
+            } else {
+                    //*&& cur->send_wait_ack < ping_window_size*/) 
                 //Received data from target host
-                proxy_desc_t *cur = fdlist_translated_to_desc[events[n].data.fd];
+                proxy_desc_t *cur = events[n].data.ptr;//fdlist_translated_to_desc[events[n].data.fd];
                 ssize_t bytes = recv(cur->sock, cur->buf, tcp_receive_buf_len, 0);
                 if (bytes <= 0) {
-                    log_info();
-                    proxy_desc_t *tmp = fdlist_translated_to_desc[events[n].data.fd+1];
+//                    proxy_desc_t *tmp = fdlist_translated_to_desc[events[n].data.fd+1];
 
                     cur->should_remove = 1;
-                    /*
                     send_termination_msg(cur, sock);
+                    /*
                     max_sock = cur->sock - 1;
                     remove_proxy_desc(cur);
                     */
@@ -327,6 +325,8 @@ uyapt_server(serv_conf_t *conf)
                 send_termination_msg(cur, sock);
                 remove_proxy_desc(cur);
                 */
+            } else {
+                break;
             }
         }
 
@@ -336,7 +336,7 @@ uyapt_server(serv_conf_t *conf)
         proxy_desc_t *recv_wait_send();
         for (proxy_desc_t *cur = recv_wait_send(conf);
                 cur;
-                proxy_desc_t *cur = recv_wait_send_next(conf)) { 
+                cur = recv_wait_send_next(conf)) { 
             if (cur->recv_wait_send && cur->sock) {
                 send_packets(&cur->recv_ring, &cur->recv_xfer_idx, &cur->recv_wait_send, &cur->sock);
             }
@@ -402,6 +402,9 @@ proxy_desc_t *create_and_insert_proxy_desc(uint16_t id_no, uint16_t icmp_id,
     cur->buf = malloc(icmp_receive_buf_len);
     cur->last_activity = time_as_double();
     
+    
+    int insert_to_chain(proxy_desc_t *cur);
+
     //don't use linked list
     //TODO
 
