@@ -334,11 +334,12 @@ uyapt_server(serv_conf_t *conf)
         int send_packets(forward_desc_t *ring[], int *xfer_idx, int *await_send, int *sock);
         
         proxy_desc_t *recv_wait_send();
+        proxy_desc_t *recv_wait_send_next();
         for (proxy_desc_t *cur = recv_wait_send(conf);
                 cur;
                 cur = recv_wait_send_next(conf)) { 
             if (cur->recv_wait_send && cur->sock) {
-                send_packets(&cur->recv_ring, &cur->recv_xfer_idx, &cur->recv_wait_send, &cur->sock);
+                send_packets(&cur->recv_ring, (int *)0, &cur->recv_wait_send, &cur->sock);
             }
         }
         
@@ -794,9 +795,7 @@ int send_packets(forward_desc_t *ring[], int  *xfer_idx, int *await_send, int *s
         }
         fwd_desc->remaining -= bytes;
         total += bytes;
-    } else {
-        break;
-    }
+    } 
 
     return total;
 }
