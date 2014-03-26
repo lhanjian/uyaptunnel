@@ -134,7 +134,7 @@ typedef struct proxy_desc_s {
 } proxy_desc_t;
 
 //START: maybe dangerous race condition after removed and reinsert desc in it
-proxy_desc_t *fdlist_translated_to_desc[MAX_EVENTS + 1];//用于通过fd反查proxy_desc_t，文件描述符
+//proxy_desc_t *fdlist_translated_to_desc[MAX_EVENTS + 1];//用于通过fd反查proxy_desc_t，文件描述符
 proxy_desc_t *id_no_translated_to_desc[MAX_EVENTS + 1];//用于通过id_no反查proxy_desc_t
 //END: maybe dangerous race condition
 
@@ -256,7 +256,6 @@ uyapt_server(serv_conf_t *conf)
 //    ev.data.fd = sock;
     epoll_ctl(epfd, EPOLL_CTL_ADD, sock, &ev);
     for (;;) {
-
         int timeout = 10000;
         int nfds = epoll_wait(epfd, events, MAX_EVENTS, timeout);
 
@@ -300,8 +299,6 @@ uyapt_server(serv_conf_t *conf)
                                  */
                     continue;
                 }
-                //
-                //
                 queue_packet(cur->sock, cur->pkt_type, cur->buf, 
                         bytes, cur->id_no, cur->icmp_id, &cur->my_seq,
                         cur->send_ring, &cur->send_idx, &cur->send_wait_ack,
@@ -318,8 +315,8 @@ uyapt_server(serv_conf_t *conf)
 
         void find_no_activity_to_close();//TODO
         //Need test the last client requesting time whether greater than the timeout
-        proxy_desc_t *the_max_timer_in_conf(serv_conf_t *);//NOW CODING
-        proxy_desc_t *the_next_timer_in_conf(serv_conf_t *);//NOW CODING
+        proxy_desc_t *the_max_timer_in_conf(serv_conf_t *);//NOW CODING TODO
+        proxy_desc_t *the_next_timer_in_conf(serv_conf_t *);//NOW CODING TODO
 
         proxy_desc_t *cur = the_max_timer_in_conf(conf);
         for (; cur; cur = the_next_timer_in_conf(conf)) {
@@ -335,11 +332,11 @@ uyapt_server(serv_conf_t *conf)
             }
         }
 
-        void send_waiting_packet();
+        void send_waiting_packet();//TODO
         int send_packets(forward_desc_t *ring[], int *xfer_idx, int *await_send, int *sock);
         
-        proxy_desc_t *recv_wait_send();
-        proxy_desc_t *recv_wait_send_next();
+        proxy_desc_t *recv_wait_send();//TODO
+        proxy_desc_t *recv_wait_send_next();//TODO
         for (proxy_desc_t *cur = recv_wait_send(conf);
                 cur;
                 cur = recv_wait_send_next(conf)) { 
@@ -348,8 +345,8 @@ uyapt_server(serv_conf_t *conf)
             }
         }
         
-        void resend_packet_requiring_resend();
-        void send_explicit_ack();
+        void resend_packet_requiring_resend();//TODO
+        void send_explicit_ack();//TODO
 
         if (pcap_dispatch(pc.pcap_desc, 32, pcap_packet_handler, 
                     (u_char *)&pc.pkt_q) > 0) {
@@ -593,8 +590,6 @@ void handle_ack(uint16_t seq_no, icmp_desc_t ring[], int *packets_awaiting_ack,
         uint16_t *remote_ack, int is_pcap)
 {
 //    ping_tunnel_pkt_t *pt_pkt;
-
-    
     if (*packets_awaiting_ack > 0) {
         /*
         if (one_ack_only) {
@@ -673,6 +668,7 @@ int queue_packet(int icmp_sock, uint8_t type, char *buf,
     } else if (err != pkt_len) {
         log_info();
     }
+
     icmp_desc_t *ring_i = &ring[*insert_idx];
 //queue pkt to send_ring
     ring[*insert_idx].pkt = pkt;
@@ -685,6 +681,7 @@ int queue_packet(int icmp_sock, uint8_t type, char *buf,
     if (!ring[*first_ack].pkt) {//around
         *first_ack = *insert_idx;
     }
+
     (*await_send)++;//add 1 to number of awaiting
     (*insert_idx)++;//index of insert_idx
     if (*insert_idx >= ping_window_size) {
@@ -767,6 +764,7 @@ void pcap_packet_handler(unsigned char *refcon,
         return;
     }
     elem->next = NULL;
+
     if (q->tail) {
         q->tail->next = elem;
         q->tail = elem;
