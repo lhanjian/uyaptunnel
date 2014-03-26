@@ -64,8 +64,6 @@ typedef struct icmp_desc_s {
     icmp_echo_packet_t  *pkt;
 } icmp_desc_t;
 
-void handle_packet(char *buf, int bytes, int is_pcap, 
-        struct sockaddr_in *addr, int icmp_sock);
 
 uint16_t calc_icmp_checksum(uint16_t *data, int bytes);
 
@@ -99,7 +97,8 @@ typedef struct pcap_info_s {
 enum {
     ether_header_length = 32,
     ping_window_size = 64,
-    auto_close_timeout = 60 
+    auto_close_timeout = 60,
+    MAX_EVENTS = 600,
 };
        
 typedef struct proxy_desc_s {
@@ -135,7 +134,6 @@ typedef struct proxy_desc_s {
 } proxy_desc_t;
 
 //START: maybe dangerous race condition after removed and reinsert desc in it
-#define MAX_EVENTS (600)
 proxy_desc_t *fdlist_translated_to_desc[MAX_EVENTS + 1];//用于通过fd反查proxy_desc_t，文件描述符
 proxy_desc_t *id_no_translated_to_desc[MAX_EVENTS + 1];//用于通过id_no反查proxy_desc_t
 //END: maybe dangerous race condition
@@ -165,6 +163,7 @@ enum {
 };
 
 double seq_expiry_tbl[seq_expiry_tbl_length];
+
 typedef struct serv_conf_s {
     uint32_t proxy_ip;//proxy's internet address
     int tcp_listen_port;
@@ -175,7 +174,9 @@ typedef struct serv_conf_s {
     char *pcap_device;
     proxy_desc_t *fd_list;
     proxy_desc_t *id_no_list;
-//    int max_tunnels;
+    int epfd;
+    struct epoll_event events[MAX_EVENTS];
+    int num_events;
 } serv_conf_t;
 
 
@@ -188,6 +189,8 @@ proxy_desc_t *create_and_insert_proxy_desc(uint16_t id_no, uint16_t icmp_id, int
 
 forward_desc_t *create_fwd_desc(uint16_t seq_no, uint32_t data_len, char *data);
 
+void handle_packet(char *buf, int bytes, int is_pcap, 
+        struct sockaddr_in *addr, int icmp_sock, struct serv_conf_s *cur);
 
 void remove_proxy_desc(proxy_desc_t *cur/*, proxy_desc_t *prev*/);
 void handle_data(icmp_echo_packet_t *pkt, int total_len, 
@@ -243,6 +246,8 @@ uyapt_server(serv_conf_t *conf)
 
 //BIIIIIIIIIIIG for-loop
     int epfd = epoll_create1(EPOLL_CLOEXEC);
+    conf->epfd = epfd;
+
     struct epoll_event ev;
     struct epoll_event events[MAX_EVENTS];
 
@@ -274,7 +279,7 @@ uyapt_server(serv_conf_t *conf)
                 ssize_t bytes = recvfrom(sock, buf, icmp_receive_buf_len, 
                         0, (struct sockaddr *)&addr, &addr_len);
                 log_info();
-                handle_packet(buf, bytes, 0, &addr, sock);
+                handle_packet(buf, bytes, 0, &addr, sock, conf);
             } else {
                     //*&& cur->send_wait_ack < ping_window_size*/) 
                 //Received data from target host
@@ -339,7 +344,7 @@ uyapt_server(serv_conf_t *conf)
                 cur;
                 cur = recv_wait_send_next(conf)) { 
             if (cur->recv_wait_send && cur->sock) {
-                send_packets(&cur->recv_ring, (int *)0, &cur->recv_wait_send, &cur->sock);
+                send_packets(cur->recv_ring, (int *)0, &cur->recv_wait_send, &cur->sock);
             }
         }
         
@@ -357,7 +362,8 @@ uyapt_server(serv_conf_t *conf)
                 addr.sin_family = AF_INET;
                 addr.sin_addr.s_addr = 
                     *(in_addr_t *)&(((ip_packet_t *)(cur->data))->src_ip);
-                handle_packet(cur->data, cur->bytes, 1, &addr, sock);
+                handle_packet(cur->data, cur->bytes, 1, &addr, sock, conf);
+
                 pc.pkt_q.head = cur->next;
                 free(cur);
                 pc.pkt_q.elems--;
@@ -480,7 +486,7 @@ void handle_data(icmp_echo_packet_t *pkt, int total_len, forward_desc_t *ring[],
 }
 
 void handle_packet(char *buf, int bytes, int is_pcap,
-        struct sockaddr_in *addr, int icmp_sock)
+        struct sockaddr_in *addr, int icmp_sock, serv_conf_t *conf)
 {
     if (bytes < sizeof(icmp_echo_packet_t) + sizeof(ping_tunnel_pkt_t)) {
        log_info(); 
@@ -532,6 +538,10 @@ void handle_packet(char *buf, int bytes, int is_pcap,
             cur = create_and_insert_proxy_desc(pt_pkt->id_no, pkt->identifier, 0,
                     addr, pt_pkt->dst_ip, ntohl(pt_pkt->dst_port), init_state,
                     kProxy_flag);
+            
+            conf->events[conf->num_events].data.ptr = cur;
+            conf->num_events++;
+
 
             //int insert_to_chain(proxy_desc_t *cur);//TODO 
             id_no_translated_to_desc[pt_pkt->id_no] = cur;
