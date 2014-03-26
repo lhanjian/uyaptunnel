@@ -270,7 +270,6 @@ uyapt_server(serv_conf_t *conf)
 
         for (int n = 0; n < nfds; n++) {
             if (events[n].data.fd == sock) {
-                //TODO:需要将fd与cur一一映射起来，而不是O(n)搜索
                 //Incoming ICMP_request, maybe new client or client 
                 //which request to target
                 socklen_t addr_len = sizeof(struct sockaddr);
@@ -313,7 +312,6 @@ uyapt_server(serv_conf_t *conf)
 
         conf->now = time_as_double();
 
-        void find_no_activity_to_close();//TODO
         //Need test the last client requesting time whether greater than the timeout
         proxy_desc_t *the_max_timer_in_conf(serv_conf_t *);//NOW CODING TODO
         proxy_desc_t *the_next_timer_in_conf(serv_conf_t *);//NOW CODING TODO
@@ -389,7 +387,7 @@ proxy_desc_t *create_and_insert_proxy_desc(uint16_t id_no, uint16_t icmp_id,
     cur->icmp_id = icmp_id;
     
     if (!sock) {
-        cur->sock = socket(AF_INET, SOCK_STREAM, 0);
+        cur->sock = socket(AF_INET, SOCK_STREAM|SOCK_NONBLOCK, 0);
         memset(addr, 0, sizeof(struct sockaddr_in));
         addr->sin_port = htons((uint16_t)dst_port);
         addr->sin_addr.s_addr = dst_ip;
