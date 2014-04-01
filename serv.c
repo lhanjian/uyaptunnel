@@ -330,7 +330,7 @@ uyapt_server(serv_conf_t *conf)
             }
         }
 
-        void send_waiting_packet();//TODO
+        void send_waiting_packet();//TODO ONE
         int send_packets(forward_desc_t *ring[], int *xfer_idx, int *await_send, int *sock);
         
         proxy_desc_t *recv_wait_send();//TODO
